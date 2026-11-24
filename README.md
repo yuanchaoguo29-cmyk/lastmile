@@ -146,6 +146,28 @@ node --env-file-if-exists=.env server/index.js     # 或用 pm2 / systemd 守护
 
 数据就是一个文件：`data/lastmile.db`，备份和迁移都是复制它。
 
+### 部署到 Railway
+
+**Railway 默认的 Node 版本会让这个项目起不来，表现为 502。** 原因有两个：
+
+1. `server/db.js` 用的是 Node 内置模块 `node:sqlite`。Node 18/20 没有这个模块；Node 22 上它仍是实验特性、需要 `--experimental-sqlite`。**导入即抛错 → 进程退出 → 边缘代理返回 502**。
+2. `npm start` 里的 `--env-file-if-exists` 需要 Node ≥ 22.9。
+
+所以仓库自带 **`Dockerfile`**（`node:24-alpine` 多阶段构建），Railway 检测到会自动用它，绕开所有版本猜测：
+
+| 文件 | 作用 |
+|---|---|
+| `Dockerfile` | 构建阶段装全量依赖并 `npm run build`；运行阶段只装生产依赖，只拷 `server/ docs/ public/` |
+| `.dockerignore` | `node_modules` / `data` / `.env` 不进镜像 |
+| `railway.json` | 健康检查 `/api/health`、失败自动重启 |
+| `.node-version` + `engines` | 万一回退到 Railpack / Nixpacks，也按 Node 24 构建 |
+
+在 Railway 上还需要配三样：
+
+1. **环境变量**：`DEEPSEEK_API_KEY`（不配也能跑，只是 AI 降级）、`COUNSELOR_KEY`（别用默认的 `123456`）、可选的 `PUBLIC_BASE_URL`
+2. **Volume**：挂一个卷到 `/app/data`，同时把 `DB_PATH` 设为 `/app/data/lastmile.db`。**不挂卷的话每次重新部署数据库都会被清空**——SQLite 文件在容器里是临时的
+3. **部署后自检**：打开 `<你的域名>/api/health`，应返回 `{"ok":true,...}`。如果仍是 502，去看 Deploy Logs，正常应该看到 `[db]` 和 `[seed]` 两行；如果进程在 `node:sqlite` 那行就退出了，说明 Node 版本还是不对
+
 > 内网穿透的注意点：免费版地址通常每次重启都会变；地址一变，已经发出去的链接和二维码就失效了。所以要么在演示前重新生成一次链接，要么用固定域名。详细的方案对比见 [`docs/tunnel-options.md`](docs/tunnel-options.md)。
 
 ---

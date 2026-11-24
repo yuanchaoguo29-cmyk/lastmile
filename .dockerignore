@@ -1,0 +1,17 @@
+node_modules
+public
+data
+shots
+_publish
+deck/render
+
+.git
+.gitignore
+.env
+*.log
+
+# 本地脚本与文档，镜像里用不到
+scripts
+demo.html
+README.md
+LICENSE
