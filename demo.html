@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LastMile · 断网兜底演示（单文件）</title>
+<style>
+/* ===== 设计令牌：对照 docs/ui-spec.md 第 3 节 ===== */
+:root{
+  --navy-900:#070D17; --navy-800:#0B1220; --navy-700:#111C2E; --navy-600:#18263D;
+  --line:#22304A; --mint:#3DDC97; --mint-2:#25B77D; --ink:#E8EEF7; --muted:#8FA3BF;
+  --amber:#F5B547; --red:#FF6B6B; --blue:#5B9DFF;
+  --s-surface:#F4F7FA; --s-line:#E2E8F0; --s-ink:#0B1220; --s-muted:#5A6B82;
+  --s-accent:#0E9F6E; --s-warn:#D97706; --s-danger:#DC2626;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans",Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:var(--sans);background:var(--navy-900);color:var(--ink);-webkit-font-smoothing:antialiased}
+body[data-view="student"]{background:var(--s-surface);color:var(--s-ink)}
+h1,h2,h3,p,ul,ol{margin:0}
+button{font-family:inherit}
+.mono{font-family:var(--mono)}
+.dim{color:var(--muted)}
+.mono-label{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+/* ===== 顶部切换条（两个视角共用，深色产品外壳） ===== */
+.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:10px 20px;background:var(--navy-800);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px}
+.mark{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--mint)}
+.brand-name{font-size:17px;font-weight:800;letter-spacing:.01em;color:var(--ink)}
+.brand-sub{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--muted);padding-top:2px}
+.switch{display:flex;gap:4px;padding:4px;background:var(--navy-700);border:1px solid var(--line);border-radius:14px}
+.switch-btn{min-height:44px;padding:10px 20px;border:0;border-radius:10px;background:transparent;color:var(--muted);font-size:14px;font-weight:600;cursor:pointer;transition:background .15s,color .15s}
+.switch-btn:hover{color:var(--ink)}
+.switch-btn.is-active{background:var(--mint);color:var(--navy-900)}
+.pill-offline{margin-left:auto;font-family:var(--mono);font-size:11px;letter-spacing:.1em;padding:6px 10px;border-radius:8px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+
+/* ===== 视角切换：同一份 DOM，CSS 控制显隐 ===== */
+.view{display:none}
+body[data-view="counselor"] .view-counselor{display:block}
+body[data-view="student"] .view-student{display:block}
+
+/* ===== 辅导员视角：深色监控台 ===== */
+.wrap{max-width:1180px;margin:0 auto;padding:24px 20px 40px}
+.card{background:var(--navy-700);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:16px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.card-head h2{font-size:16px;font-weight:700;color:var(--ink)}
+.badge{font-size:12px;font-weight:700;padding:4px 10px;border-radius:8px;white-space:nowrap}
+.badge-mint{background:rgba(61,220,151,.14);color:var(--mint);border:1px solid rgba(61,220,151,.35)}
+.notice-title{font-size:24px;line-height:1.35;font-weight:700;margin:8px 0 14px;color:var(--ink)}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+.chip{font-family:var(--mono);font-size:11px;letter-spacing:.02em;padding:5px 9px;border-radius:8px;border:1px solid var(--line);color:var(--muted);background:var(--navy-800)}
+.chip-risk{border-color:rgba(245,181,71,.4);color:var(--amber);background:rgba(245,181,71,.08)}
+.prog-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:14px;margin-bottom:8px}
+.prog-head b{font-size:16px;color:var(--mint)}
+.bar{height:8px;border-radius:4px;background:var(--navy-600);overflow:hidden}
+.bar>i{display:block;height:100%;width:0;border-radius:4px;background:var(--mint);transition:width .55s cubic-bezier(.2,.8,.2,1)}
+details.raw{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}
+details.raw summary{cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);min-height:32px;display:flex;align-items:center}
+details.raw summary:hover{color:var(--mint)}
+details.raw pre{margin:12px 0 0;max-height:300px;overflow:auto;white-space:pre-wrap;font-family:var(--mono);font-size:12.5px;line-height:1.8;color:var(--muted);background:var(--navy-800);border:1px solid var(--line);border-radius:10px;padding:14px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+.stat{background:var(--navy-700);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.stat .num{display:block;font-family:var(--mono);font-size:clamp(30px,4.4vw,44px);font-weight:700;line-height:1.1;margin:6px 0 2px;color:var(--ink);font-variant-numeric:tabular-nums}
+.stat .num.mint{color:var(--mint)}
+.stat .num.amber{color:var(--amber)}
+.stat-sub{font-size:13px;color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12px;color:var(--muted);margin-bottom:12px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;vertical-align:middle}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px;min-width:520px}
+th{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:500;padding:0 10px 10px;border-bottom:1px solid var(--line)}
+td{padding:11px 10px;border-bottom:1px solid rgba(34,48,74,.7);color:var(--ink)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--navy-600)}
+.btn-row{display:flex;flex-wrap:wrap;gap:12px}
+.btn{min-height:48px;padding:12px 22px;border-radius:14px;border:1px solid var(--line);background:var(--navy-600);color:var(--ink);font-size:15px;font-weight:600;cursor:pointer;transition:filter .15s,transform .1s}
+.btn:hover{filter:brightness(1.12)}
+.btn:active{transform:translateY(1px)}
+.btn-primary{background:var(--mint);border-color:var(--mint);color:var(--navy-900);font-weight:700}
+.btn-small{min-height:36px;padding:6px 14px;font-size:13px;border-radius:10px}
+.hint{font-size:13px;line-height:1.7;color:var(--muted);margin-top:14px}
+.nudge-box{margin-top:16px}
+.nudge-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.nudge{margin:0;white-space:pre-wrap;word-break:break-word;background:var(--navy-800);border:1px solid var(--line);border-radius:14px;padding:16px 18px;font-family:var(--mono);font-size:13px;line-height:1.85;color:var(--ink)}
+.c-foot{font-size:12px;color:var(--muted);text-align:center;padding:10px 0 0;line-height:1.8}
+
+/* ===== 学生视角：白底大字，最大 480px 居中 ===== */
+.phone{max-width:480px;margin:0 auto;padding:18px 16px 72px}
+.phone-top{display:flex;justify-content:space-between;gap:10px;padding:4px 4px 14px}
+.scard{background:#fff;border:1px solid var(--s-line);border-radius:20px;padding:22px 20px;margin-bottom:14px}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--s-muted);margin-bottom:12px}
+.scard h1{font-size:32px;line-height:1.25;font-weight:800;letter-spacing:-.01em;margin:10px 0 14px}
+.scard h2{font-size:22px;line-height:1.35;font-weight:800}
+.langs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.lang-chip{min-height:44px;padding:8px 14px;border-radius:12px;border:1px solid var(--s-line);background:#fff;color:var(--s-muted);font-size:15px;font-weight:600;cursor:pointer}
+.lang-chip.is-active{background:var(--s-ink);border-color:var(--s-ink);color:#fff}
+.oneline{font-size:19px;line-height:1.55;font-weight:600;color:var(--s-ink);border-left:4px solid var(--s-accent);padding:2px 0 2px 14px;margin-bottom:14px}
+.who{font-size:15px;line-height:1.6;color:var(--s-muted)}
+.actions{list-style:none;padding:0;margin:4px 0 0}
+.actions li{display:flex;gap:14px;align-items:flex-start;font-size:20px;line-height:1.5;padding:14px 0;border-top:1px solid var(--s-line)}
+.actions li:first-child{border-top:0;padding-top:4px}
+.act-num{flex:0 0 38px;height:38px;border-radius:50%;background:var(--s-accent);color:#fff;font-family:var(--mono);font-size:18px;font-weight:700;display:grid;place-items:center}
+.dl-block{margin-bottom:18px}
+.dl-label{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--s-muted);margin-bottom:6px}
+.dl-big{font-size:26px;line-height:1.3;font-weight:800;color:var(--s-accent)}
+.countdown{display:inline-block;margin-top:10px;font-family:var(--mono);font-size:15px;font-weight:600;color:var(--s-accent);background:#ECFDF5;border:1px solid #C7F0DF;border-radius:10px;padding:6px 12px}
+.kv{padding-top:16px;margin-top:16px;border-top:1px solid var(--s-line)}
+.kv p{font-size:19px;line-height:1.55}
+.mats{list-style:none;padding:0;margin:4px 0 0}
+.mats li{font-size:18px;line-height:1.55;padding:7px 0 7px 26px;position:relative}
+.mats li::before{content:"";position:absolute;left:4px;top:16px;width:8px;height:8px;border-radius:50%;background:var(--s-accent)}
+.btn-cal{display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px;width:100%;margin-top:18px;border-radius:16px;border:1px solid var(--s-line);background:var(--s-surface);color:var(--s-ink);font-size:17px;font-weight:700;text-decoration:none}
+.btn-cal:hover{background:#EBF1F7}
+.opt{display:block;width:100%;text-align:left;min-height:56px;padding:16px 18px;margin-bottom:10px;border-radius:16px;border:1px solid var(--s-line);background:#fff;color:var(--s-ink);font-size:18px;line-height:1.5;cursor:pointer;transition:border-color .12s,background .12s}
+.opt:hover{border-color:#CBD5E1}
+.opt.is-wrong{border-color:var(--s-danger);background:#FEF2F2;color:#991B1B}
+.quiz-ok{background:#ECFDF5;border:1px solid #C7F0DF;border-radius:16px;padding:18px}
+.quiz-ok b{display:block;font-size:20px;color:var(--s-accent);margin-bottom:8px}
+.quiz-ok p{font-size:17px;line-height:1.6;color:var(--s-ink)}
+.span-box{margin-top:12px;background:#FFFBEB;border-left:4px solid var(--s-warn);border-radius:0 12px 12px 0;padding:14px 16px}
+.span-label{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--s-warn);margin-bottom:8px}
+.span-box p{font-size:17px;line-height:1.65;color:#7C2D12}
+.span-hint{font-weight:700;margin-top:10px}
+.btn-main{display:block;width:100%;min-height:60px;margin-bottom:10px;border:0;border-radius:16px;background:var(--s-accent);color:#fff;font-size:19px;font-weight:800;cursor:pointer}
+.btn-main:hover{filter:brightness(1.06)}
+.btn-ghost{display:block;width:100%;min-height:56px;border-radius:16px;border:1px solid var(--s-line);background:#fff;color:var(--s-ink);font-size:17px;font-weight:600;cursor:pointer}
+.btn-ghost:hover{background:var(--s-surface)}
+.fine{font-size:14px;line-height:1.6;color:var(--s-muted);text-align:center;margin-top:12px}
+.help-note{margin-bottom:14px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:14px;padding:14px 16px;font-size:17px;line-height:1.6;color:#92400E}
+.done-card{text-align:center}
+.done-mark{width:64px;height:64px;margin:4px auto 14px;border-radius:50%;background:var(--s-accent);color:#fff;font-size:34px;line-height:64px;font-weight:700}
+.done-title{font-size:26px;font-weight:800;margin-bottom:8px}
+.done-time{font-family:var(--mono);font-size:14px;color:var(--s-muted);margin-bottom:10px}
+.done-sub{font-size:16px;color:var(--s-muted);line-height:1.6}
+.done-count{margin-top:16px;padding-top:16px;border-top:1px solid var(--s-line);font-size:17px;font-weight:600;color:var(--s-ink)}
+.done-count b{color:var(--s-accent)}
+.official{background:var(--s-surface);border:1px solid var(--s-line);border-radius:16px;padding:18px}
+.official h2{font-size:20px;line-height:1.4;color:#92400E;margin-bottom:10px}
+.official>p{font-size:17px;line-height:1.65;color:var(--s-ink)}
+.contacts{list-style:none;padding:0;margin:16px 0 0}
+.contacts li{padding:12px 0;border-top:1px solid var(--s-line)}
+.contacts b{display:block;font-size:16px;color:var(--s-muted);font-weight:600;margin-bottom:4px}
+.tel{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--s-ink);text-decoration:none;border-bottom:2px solid var(--s-accent);padding-bottom:2px}
+.office-hours{margin-top:14px;font-size:15px;line-height:1.6;color:var(--s-muted)}
+.official-foot{margin-top:12px;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--s-muted);letter-spacing:.02em}
+/* 底部常驻的离线标记（学生视角） */
+.offline-mark{position:fixed;left:0;right:0;bottom:0;z-index:30;display:none;align-items:center;justify-content:center;gap:8px;padding:10px 12px;background:rgba(255,255,255,.97);border-top:1px solid var(--s-line);font-size:12px;letter-spacing:.02em;color:var(--s-muted)}
+body[data-view="student"] .offline-mark{display:flex}
+@media (max-width:560px){
+  .topbar{gap:10px;padding:10px 14px}.pill-offline{margin-left:0}.wrap{padding:16px 14px 32px}
+  .card{padding:16px 14px}.stats{grid-template-columns:1fr 1fr;gap:10px}
+  .scard{padding:18px 16px}.scard h1{font-size:27px}.actions li{font-size:19px}
+}
+</style>
+</head>
+<body data-view="counselor">
+
+<!-- ===== 顶部切换条 ===== -->
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <path d="M3 14.5 7.6 6l3.9 5.8 2-2.9L17 14.5" stroke="#0B1220" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </span>
+    <span class="brand-name">LastMile</span>
+    <span class="brand-sub">最后一公里</span>
+  </div>
+  <div class="switch" role="tablist" aria-label="视角切换">
+    <button type="button" class="switch-btn is-active" data-target="counselor" role="tab" aria-selected="true">辅导员视角</button>
+    <button type="button" class="switch-btn" data-target="student" role="tab" aria-selected="false">学生视角</button>
+  </div>
+  <span class="pill-offline">OFFLINE DEMO · 单文件</span>
+</header>
+
+<!-- ===== 辅导员视角 ===== -->
+<main class="view view-counselor">
+  <div class="wrap">
+
+    <section class="card">
+      <div class="card-head">
+        <span class="mono-label">PUBLISHED · 居留许可延期</span>
+        <span class="badge badge-mint">已发布</span>
+      </div>
+      <h1 class="notice-title">关于2026级国际学生办理居留许可延期的通知</h1>
+      <div class="meta">
+        <span class="chip">kind: residence_permit</span>
+        <span class="chip">deadline: 2026-11-25 17:00</span>
+        <span class="chip">发布 2026-11-18</span>
+        <span class="chip chip-risk">risk_flag: residence_permit</span>
+        <span class="chip">langs: en / ru / vi / zh</span>
+      </div>
+      <div class="prog-head">
+        <span>本班 <b class="mono" id="c-frac">18/114</b> 已确认</span>
+        <span class="mono dim" id="c-pct">15.8%</span>
+      </div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="114" aria-valuenow="18">
+        <i id="c-bar" style="width:15.8%"></i>
+      </div>
+      <details class="raw">
+        <summary>查看通知全文（内置原文，未联网）</summary>
+        <pre id="raw-text"></pre>
+      </details>
+    </section>
+
+    <section class="stats">
+      <div class="stat"><span class="mono-label">CONFIRMED</span><b class="num mint" id="n-confirmed">18</b><span class="stat-sub">已确认</span></div>
+      <div class="stat"><span class="mono-label">UNREAD</span><b class="num" id="n-unread">79</b><span class="stat-sub">未读</span></div>
+      <div class="stat"><span class="mono-label">NEED HELP</span><b class="num amber" id="n-help">2</b><span class="stat-sub">有困难</span></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>学生名单 · 重点跟踪 10 人</h2>
+        <span class="mono-label">ROSTER 114</span>
+      </div>
+      <div class="legend">
+        <span><i class="dot" style="background:#3DDC97"></i>已确认</span>
+        <span><i class="dot" style="background:#5B9DFF"></i>已读未确认</span>
+        <span><i class="dot" style="background:#F5B547"></i>有困难</span>
+        <span><i class="dot" style="background:#8FA3BF"></i>未读</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>学号</th><th>姓名</th><th>语言</th><th>状态</th><th>回执时间</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>催办 · 模拟回执</h2>
+        <span class="mono-label">ACTIONS</span>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btn-nudge">生成催办文案</button>
+        <button type="button" class="btn" id="btn-simulate">模拟学生提交回执</button>
+      </div>
+      <p class="hint" id="sim-hint">点「模拟学生提交回执」：已确认 +1、进度条前进、名单里某位同学的状态点变绿。学生视角里点确认也会同步到这里。</p>
+      <div class="nudge-box" id="nudge-box" hidden>
+        <div class="nudge-head">
+          <span class="mono-label">NUDGE · 可直接粘贴到群</span>
+          <button type="button" class="btn btn-small" id="btn-copy">复制文案</button>
+        </div>
+        <pre class="nudge" id="nudge-text"></pre>
+      </div>
+    </section>
+
+    <p class="c-foot">本页为离线演示版 · 单文件 demo.html · 无任何网络请求，数据全部内置</p>
+  </div>
+</main>
+
+<!-- ===== 学生视角（手机列） ===== -->
+<main class="view view-student">
+  <div class="phone">
+    <div class="phone-top">
+      <span class="mono-label">LASTMILE · 学生卡片</span>
+      <span class="mono-label">ntc_1 · 20260007</span>
+    </div>
+    <div id="student-root"></div>
+  </div>
+</main>
+
+<div class="offline-mark">● 本页为离线演示版 · 无网络请求 · 数据内置在 demo.html 里</div>
+
+<script>
+/* ==========================================================================
+   LastMile 断网兜底 demo（单文件，零外部依赖，file:// 直接打开可用）
+   内置数据 = docs/seed-notices.md 通知 1（居留许可延期），字段形状对照
+   docs/api.md 的 StructuredNotice / Quiz / Translation。所有文案写死在此。
+   ========================================================================== */
+
+/* ---------- 1. 通知原文（逐字照抄 seed-notices.md，不改写） ---------- */
+const RAW_TEXT = `关于2026级国际学生办理居留许可延期的通知
+
+2026级全体国际学生：
+
+根据成都市公安局出入境管理局要求，我校国际学生居留许可即将集中到期。现将统一办理延期事宜通知如下：
+
+一、办理对象：2026级全体国际学生（含本科生、硕士研究生），共114人。
+二、办理时间：2026年11月25日（周三）17:00前，工作日上午9:00-11:30、下午14:00-17:00。
+三、办理地点：柳林校区通博楼A座204办公室（国际学生事务中心）。
+四、所需材料：
+  1. 护照原件及复印件1份（照片页、签证页、入境章页）；
+  2. 学生证原件；
+  3. 填写完整的《外国人签证证件申请表》（现场领取）；
+  4. 近期免冠白底照片2张（2寸）。
+五、注意事项：须本人到场办理，不接受代办。逾期未办理者，居留许可过期将按非法居留处理，后果自负。
+六、联系人：张老师，028-87092233；李老师，028-87092234。
+
+西南财经大学经济与管理研究院 学生工作办公室
+2026年11月18日`;
+
+/* ---------- 2. 结构化通知 + 四语文案（zh 为母版，en/ru/vi 手写） ---------- */
+const NOTICE = {
+  id: 'ntc_1',
+  kind: 'residence_permit',
+  status: 'published',
+  owner: '张老师',
+  sent_at: '2026-11-18T10:00:00+08:00',
+  roster: 114,
+  risk_flags: ['residence_permit'],
+  available_langs: ['en', 'ru', 'vi', 'zh'],
+  deadline: {
+    raw: '2026年11月25日（周三）17:00前',
+    iso: '2026-11-25T17:00:00+08:00',
+    confidence: 'high',
+    basis: '原文写明绝对日期 + 时间'
+  },
+  place: { raw: '柳林校区通博楼A座204办公室', note: '国际学生事务中心' },
+  /* 居留许可类必须有官方渠道；离线版不内置任何外部链接 */
+  official_links: [],
+  contacts: [
+    { name: '张老师', phone: '028-87092233', role: '国际学生事务中心' },
+    { name: '李老师', phone: '028-87092234', role: '国际学生事务中心' }
+  ],
+  translations: {
+
+    /* --- 中文母版 --- */
+    zh: {
+      lang: 'zh',
+      title: '关于2026级国际学生办理居留许可延期的通知',
+      one_line: '11月25日17:00前，带护照原件到通博楼A座204办公室办居留许可延期',
+      what: '学院统一组织居留许可延期办理，须本人到现场提交材料，不接受代办。',
+      who: '2026级全体国际学生（114人）',
+      actions: [
+        { order: 1, text: '带上护照原件和复印件 1 份（照片页、签证页、入境章页）' },
+        { order: 2, text: '带上学生证原件和 2 张 2 寸白底照片' },
+        { order: 3, text: '11月25日17:00前，本人到通博楼A座204办公室' },
+        { order: 4, text: '现场填写《外国人签证证件申请表》并交材料' }
+      ],
+      deadline_text: '2026年11月25日（周三）17:00',
+      place_text: '柳林校区 通博楼A座 204 办公室（国际学生事务中心）',
+      materials: ['护照原件 + 复印件 1 份', '学生证原件', '2 寸白底照片 2 张', '《外国人签证证件申请表》（现场领取）'],
+      consequence: '逾期未办理，居留许可过期将按非法居留处理，后果自负。',
+      quiz: {
+        question: '这件事，你要在什么时候、带什么、去哪里办？',
+        options: [
+          '11月25日17:00前，带护照原件到通博楼A座204办公室办理',
+          '在宿舍等老师上门收材料',
+          '在网上填一张申请表就行，不用去现场',
+          '11月25日之后随便哪天去都可以'
+        ],
+        answer_index: 0,
+        source_span: '二、办理时间：2026年11月25日（周三）17:00前。三、办理地点：柳林校区通博楼A座204办公室（国际学生事务中心）。',
+        explain: '必须本人到场，带护照原件和材料，11月25日17:00 前到通博楼A座204。'
+      }
+    },
+
+    /* --- English --- */
+    en: {
+      lang: 'en',
+      title: 'Residence Permit Extension for 2026 International Students',
+      one_line: 'Bring your passport to Room 204, Tongbo Bldg A, before 25 Nov, 17:00.',
+      what: 'The college arranges the extension for all 2026 international students. You must come in person — nobody can go for you.',
+      who: 'All 2026 international students (114 people)',
+      actions: [
+        { order: 1, text: 'Bring your passport (original) plus one photocopy of the photo page, visa page and entry stamp page' },
+        { order: 2, text: 'Bring your student ID card and two 2-inch photos with a white background' },
+        { order: 3, text: 'Come to Room 204, Tongbo Building A, in person before 25 Nov, 17:00' },
+        { order: 4, text: 'Fill in the visa application form at the office and hand in your documents' }
+      ],
+      deadline_text: '25 November 2026 (Wed), 17:00',
+      place_text: 'Room 204, Tongbo Building A, Liulin Campus (International Students Office)',
+      materials: ['Passport (original) + one copy', 'Student ID card (original)', 'Two 2-inch white-background photos', 'Visa application form (pick it up on site)'],
+      consequence: 'If you miss the deadline your permit expires and you will be treated as staying illegally.',
+      quiz: {
+        question: 'What exactly do you have to do, and by when?',
+        options: [
+          'Go to Room 204, Tongbo Bldg A with my passport before 25 Nov, 17:00',
+          'Wait in my dorm for a teacher to collect my documents',
+          'Fill in a form online — no need to go anywhere',
+          'Go any day I like after 25 November'
+        ],
+        answer_index: 0,
+        source_span: 'Time: before 17:00, 25 November 2026 (Wed). Place: Room 204, Tongbo Building A, Liulin Campus.',
+        explain: 'You must come in person with your passport. The office closes at 17:00 on 25 November.'
+      }
+    },
+
+    /* --- Русский --- */
+    ru: {
+      lang: 'ru',
+      title: 'Продление вида на жительство для иностранных студентов 2026 года',
+      one_line: 'До 25 ноября, 17:00 принесите паспорт в кабинет 204, корпус Тунбо A.',
+      what: 'Институт централизованно оформляет продление вида на жительство. Прийти нужно лично, за вас это сделать нельзя.',
+      who: 'Все иностранные студенты набора 2026 года (114 человек)',
+      actions: [
+        { order: 1, text: 'Возьмите оригинал паспорта и одну копию: страница с фото, виза, штамп о въезде' },
+        { order: 2, text: 'Возьмите студенческий билет и две фотографии 2 дюйма на белом фоне' },
+        { order: 3, text: 'До 25 ноября, 17:00 лично придите в кабинет 204, корпус Тунбо A' },
+        { order: 4, text: 'Заполните бланк заявления на визу в офисе и сдайте документы' }
+      ],
+      deadline_text: '25 ноября 2026 г. (среда), 17:00',
+      place_text: 'Кабинет 204, корпус Тунбо A, кампус Люлинь (офис по делам иностранных студентов)',
+      materials: ['Паспорт (оригинал) + 1 копия', 'Студенческий билет', 'Два фото 2 дюйма на белом фоне', 'Бланк заявления на визу (выдают на месте)'],
+      consequence: 'Если не успеть, вид на жительство истечёт, и это будет считаться незаконным пребыванием.',
+      quiz: {
+        question: 'Что именно нужно сделать и до какого срока?',
+        options: [
+          'До 25 ноября, 17:00 прийти с паспортом в кабинет 204, корпус Тунбо A',
+          'Ждать в общежитии: преподаватель сам придёт за документами',
+          'Заполнить форму в интернете, приходить не нужно',
+          'Прийти в любой день после 25 ноября'
+        ],
+        answer_index: 0,
+        source_span: 'Срок: до 17:00 25 ноября 2026 г. (среда). Место: кабинет 204, корпус Тунбо A, кампус Люлинь.',
+        explain: 'Нужно прийти лично с паспортом. 25 ноября офис закрывается в 17:00.'
+      }
+    },
+
+    /* --- Tiếng Việt --- */
+    vi: {
+      lang: 'vi',
+      title: 'Gia hạn giấy phép cư trú cho lưu học sinh khoá 2026',
+      one_line: 'Trước 17:00 ngày 25/11, mang hộ chiếu đến phòng 204, toà nhà Tongbo A.',
+      what: 'Nhà trường tổ chức gia hạn giấy phép cư trú cho toàn bộ lưu học sinh khoá 2026. Bạn phải tự đến, không được nhờ người khác làm thay.',
+      who: 'Toàn bộ lưu học sinh khoá 2026 (114 người)',
+      actions: [
+        { order: 1, text: 'Mang hộ chiếu bản gốc và 1 bản photo: trang ảnh, trang visa, trang dấu nhập cảnh' },
+        { order: 2, text: 'Mang thẻ học sinh và 2 ảnh thẻ 2 inch nền trắng' },
+        { order: 3, text: 'Trước 17:00 ngày 25/11, tự đến phòng 204, toà nhà Tongbo A' },
+        { order: 4, text: 'Điền mẫu đơn xin visa tại chỗ và nộp hồ sơ' }
+      ],
+      deadline_text: '17:00 ngày 25 tháng 11 năm 2026 (thứ Tư)',
+      place_text: 'Phòng 204, toà nhà Tongbo A, cơ sở Liulin (Văn phòng lưu học sinh)',
+      materials: ['Hộ chiếu bản gốc + 1 bản photo', 'Thẻ học sinh', '2 ảnh 2 inch nền trắng', 'Mẫu đơn xin visa (nhận tại chỗ)'],
+      consequence: 'Nếu quá hạn, giấy phép cư trú sẽ hết hạn và bị coi là cư trú bất hợp pháp.',
+      quiz: {
+        question: 'Bạn cần làm gì, vào lúc nào và ở đâu?',
+        options: [
+          'Trước 17:00 ngày 25/11, mang hộ chiếu đến phòng 204, toà nhà Tongbo A',
+          'Ở ký túc xá chờ giáo viên đến lấy hồ sơ',
+          'Điền form trên mạng là đủ, không cần đến',
+          'Đến ngày nào sau 25/11 cũng được'
+        ],
+        answer_index: 0,
+        source_span: 'Thời gian: trước 17:00 ngày 25/11/2026 (thứ Tư). Địa điểm: phòng 204, toà nhà Tongbo A, cơ sở Liulin.',
+        explain: 'Bạn phải tự đến và mang hộ chiếu. Ngày 25/11 văn phòng đóng cửa lúc 17:00.'
+      }
+    }
+  }
+};
+
+/* ---------- 3. 界面文案（UI chrome i18n） ---------- */
+const LANG_LABEL = { en: 'English', ru: 'Русский', vi: 'Tiếng Việt', zh: '中文' };
+const UI = {
+  zh: {
+    kicker: '居留许可 · 官方通知', who: '适用于',
+    actions: '你要做什么', when: '什么时候 · 去哪里', quiz: '先确认你看懂了',
+    confirm: '确认', official: '官方渠道',
+    deadline: '截止时间', place: '地点', materials: '要带的东西', addCal: '加入日历',
+    countdown: (d, h) => `还剩 ${d} 天 ${h} 小时`,
+    expired: '已过截止时间，请马上联系老师',
+    yes: '我已知晓，会按时完成', help: '我有困难，需要帮助',
+    confirmFine: '点一下就算回执完成，老师能看到。',
+    done: '已确认，谢谢！', doneSub: '老师已经收到你的回执。',
+    classConfirm: '本班', confirmed: '已确认',
+    helpDone: '已把你的困难记下来，老师会联系你。',
+    right: '答对了！', original: '原文是这么写的',
+    retry: '看完原文，再选一次 →',
+    officialTitle: '这类问题请找官方渠道',
+    officialBody: '居留许可、签证、护照属于官方事务。LastMile 只能帮你读懂通知，不能给你个人建议。',
+    hours: '办公时间：周一至周五 9:00–11:30 / 14:00–17:00',
+    officialFoot: '离线演示版不含任何外部链接，只列出官方电话。'
+  },
+  en: {
+    kicker: 'RESIDENCE PERMIT · OFFICIAL NOTICE', who: 'Applies to',
+    actions: 'What you need to do', when: 'When and where', quiz: 'Check you understood',
+    confirm: 'Confirm', official: 'Official channels',
+    deadline: 'Deadline', place: 'Place', materials: 'What to bring', addCal: 'Add to calendar',
+    countdown: (d, h) => `${d} days ${h} hours left`,
+    expired: 'The deadline has passed — contact your teacher now',
+    yes: 'I understand and will do it on time', help: 'I need help with this',
+    confirmFine: 'One tap is enough. Your teacher will see it.',
+    done: 'Confirmed. Thank you!', doneSub: 'Your teacher has received your response.',
+    classConfirm: 'Class', confirmed: 'confirmed',
+    helpDone: 'We recorded your problem. A teacher will contact you.',
+    right: 'Correct!', original: 'This is what the notice says',
+    retry: 'Read it again and pick once more →',
+    officialTitle: 'Please use the official channels for this',
+    officialBody: 'Residence permits, visas and passports are official matters. LastMile only explains the notice; it cannot advise on your own case.',
+    hours: 'Office hours: Mon–Fri, 9:00–11:30 and 14:00–17:00',
+    officialFoot: 'This offline demo has no external links — only official phone numbers.'
+  },
+  ru: {
+    kicker: 'ВИД НА ЖИТЕЛЬСТВО · ОФИЦИАЛЬНОЕ УВЕДОМЛЕНИЕ', who: 'Кого касается',
+    actions: 'Что нужно сделать', when: 'Когда и куда', quiz: 'Проверьте, всё ли понятно',
+    confirm: 'Подтверждение', official: 'Официальные каналы',
+    deadline: 'Срок', place: 'Место', materials: 'Что взять с собой', addCal: 'Добавить в календарь',
+    countdown: (d, h) => `осталось ${d} дн. ${h} ч.`,
+    expired: 'Срок прошёл — сразу свяжитесь с преподавателем',
+    yes: 'Я понял(а) и сделаю всё вовремя', help: 'Мне нужна помощь',
+    confirmFine: 'Одного нажатия достаточно. Преподаватель увидит ваш ответ.',
+    done: 'Подтверждено. Спасибо!', doneSub: 'Преподаватель получил ваш ответ.',
+    classConfirm: 'Группа', confirmed: 'подтвердили',
+    helpDone: 'Мы записали вашу проблему. С вами свяжется преподаватель.',
+    right: 'Верно!', original: 'В уведомлении сказано',
+    retry: 'Перечитайте и выберите ещё раз →',
+    officialTitle: 'По этим вопросам обращайтесь в официальные органы',
+    officialBody: 'Вид на жительство, виза и паспорт — официальные вопросы. LastMile только объясняет уведомление и не даёт личных советов.',
+    hours: 'Часы работы: пн–пт, 9:00–11:30 и 14:00–17:00',
+    officialFoot: 'Офлайн-демо без внешних ссылок — только официальные телефоны.'
+  },
+  vi: {
+    kicker: 'GIẤY PHÉP CƯ TRÚ · THÔNG BÁO CHÍNH THỨC', who: 'Áp dụng cho',
+    actions: 'Bạn cần làm gì', when: 'Khi nào và ở đâu', quiz: 'Kiểm tra lại xem bạn đã hiểu chưa',
+    confirm: 'Xác nhận', official: 'Kênh chính thức',
+    deadline: 'Hạn chót', place: 'Địa điểm', materials: 'Cần mang theo', addCal: 'Thêm vào lịch',
+    countdown: (d, h) => `còn ${d} ngày ${h} giờ`,
+    expired: 'Đã quá hạn — hãy liên hệ giáo viên ngay',
+    yes: 'Tôi đã hiểu và sẽ làm đúng hạn', help: 'Tôi cần được giúp đỡ',
+    confirmFine: 'Chỉ cần bấm một lần, giáo viên sẽ thấy.',
+    done: 'Đã xác nhận. Cảm ơn bạn!', doneSub: 'Giáo viên đã nhận được xác nhận của bạn.',
+    classConfirm: 'Lớp', confirmed: 'đã xác nhận',
+    helpDone: 'Chúng tôi đã ghi nhận khó khăn của bạn. Giáo viên sẽ liên hệ.',
+    right: 'Chính xác!', original: 'Nguyên văn thông báo',
+    retry: 'Đọc lại rồi chọn lại một lần nữa →',
+    officialTitle: 'Vấn đề này cần hỏi kênh chính thức',
+    officialBody: 'Giấy phép cư trú, visa và hộ chiếu là việc chính thức. LastMile chỉ giúp bạn hiểu thông báo, không tư vấn cho trường hợp riêng của bạn.',
+    hours: 'Giờ làm việc: thứ Hai – thứ Sáu, 9:00–11:30 và 14:00–17:00',
+    officialFoot: 'Bản demo offline không có liên kết bên ngoài — chỉ có số điện thoại chính thức.'
+  }
+};
+
+/* ---------- 4. 名单（演示用 10 人，主角 = NGUYEN Van Anh） ---------- */
+const ME_ID = '20260007';
+const STUDENTS = [
+  { id: '20260007', name: 'NGUYEN Van Anh',    lang: 'vi', status: 'seen',      confirmed_at: null },
+  { id: '20260012', name: 'Daria Ivanova',     lang: 'ru', status: 'confirmed', confirmed_at: '11-19 09:12' },
+  { id: '20260015', name: 'Somchai Prasert',   lang: 'th', status: 'unread',    confirmed_at: null },
+  { id: '20260021', name: 'Budi Santoso',      lang: 'id', status: 'confirmed', confirmed_at: '11-19 14:40' },
+  { id: '20260033', name: 'Ekaterina Volkova', lang: 'ru', status: 'unread',    confirmed_at: null },
+  { id: '20260041', name: 'Tran Thi Mai',      lang: 'vi', status: 'help',      confirmed_at: null },
+  { id: '20260052', name: 'Aisha Rahman',      lang: 'en', status: 'unread',    confirmed_at: null },
+  { id: '20260058', name: 'Putri Wulandari',   lang: 'id', status: 'seen',      confirmed_at: null },
+  { id: '20260063', name: 'Mikhail Sokolov',   lang: 'ru', status: 'unread',    confirmed_at: null },
+  { id: '20260071', name: 'James Carter',      lang: 'en', status: 'confirmed', confirmed_at: '11-18 22:05' }
+];
+const STATUS_META = {
+  confirmed: { zh: '已确认',     color: '#3DDC97' },
+  seen:      { zh: '已读未确认', color: '#5B9DFF' },
+  help:      { zh: '有困难',     color: '#F5B547' },
+  unread:    { zh: '未读',       color: '#8FA3BF' }
+};
+
+/* ---------- 5. 内存状态（不落 localStorage：刷新即回到初始演示态） ---------- */
+const state = {
+  view: 'counselor',
+  lang: 'en',
+  counts: { roster: NOTICE.roster, confirmed: 18, seen: 15, help: 2 }, // unread 由总数推导
+  studentStatus: 'unread',   // unread → seen → confirmed / help
+  confirmedAt: '',
+  quiz: { solved: false, wrong: null }
+};
+
+/* ---------- 6. 工具函数 ---------- */
+const $ = (id) => document.getElementById(id);
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/* 时间戳：11月20日 21:07（不依赖任何 locale 数据） */
+function stamp() {
+  const d = new Date();
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/* 倒计时：按 deadline.iso 实时算 */
+function countdownText(lang) {
+  const ms = new Date(NOTICE.deadline.iso).getTime() - Date.now();
+  if (ms <= 0) return UI[lang].expired;
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
+  return UI[lang].countdown(d, h);
+}
+
+/* 生成 .ics，用 data: 链接下载（不联网、不需要任何库） */
+function buildIcsHref() {
+  const start = new Date(NOTICE.deadline.iso);
+  const end = new Date(start.getTime() + 3600000);
+  const fmt = (dt) => dt.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const zh = NOTICE.translations.zh;
+  const lines = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//LastMile//Offline Demo//CN',
+    'CALSCALE:GREGORIAN', 'BEGIN:VEVENT', 'UID:lastmile-ntc_1@offline-demo',
+    'DTSTAMP:' + fmt(new Date()),
+    'DTSTART:' + fmt(start),
+    'DTEND:' + fmt(end),
+    'SUMMARY:' + zh.one_line,
+    'LOCATION:' + NOTICE.place.raw,
+    'DESCRIPTION:' + NOTICE.deadline.raw + ' ' + NOTICE.place.raw,
+    'BEGIN:VALARM', 'TRIGGER:-PT12H', 'ACTION:DISPLAY',
+    'DESCRIPTION:LastMile 提醒', 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'
+  ];
+  return 'data:text/calendar;charset=utf-8,' + encodeURIComponent(lines.join('\r\n'));
+}
+
+/* ---------- 7. 辅导员视角渲染 ---------- */
+function unreadCount() {
+  const c = state.counts;
+  return c.roster - c.confirmed - c.seen - c.help;
+}
+
+function renderTable() {
+  $('rows').innerHTML = STUDENTS.map((s) => {
+    const m = STATUS_META[s.status];
+    return `<tr>
+      <td class="mono">${s.id}</td>
+      <td>${s.name}</td>
+      <td class="mono dim">${s.lang}</td>
+      <td><i class="dot" style="background:${m.color}"></i>${m.zh}</td>
+      <td class="mono dim">${s.confirmed_at || '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderCounselor() {
+  const c = state.counts;
+  const pct = (c.confirmed / c.roster * 100).toFixed(1);
+  $('c-frac').textContent = `${c.confirmed}/${c.roster}`;
+  $('c-pct').textContent = `${pct}%`;
+  $('c-bar').style.width = `${pct}%`;
+  $('c-bar').parentElement.setAttribute('aria-valuenow', String(c.confirmed));
+  $('n-confirmed').textContent = c.confirmed;
+  $('n-unread').textContent = unreadCount();
+  $('n-help').textContent = c.help;
+  renderTable();
+}
+
+/* ---------- 8. 学生视角渲染（一屏一卡，语言切换即时重渲染） ---------- */
+function renderStudent() {
+  const lang = state.lang;
+  const tr = NOTICE.translations[lang];
+  const ui = UI[lang];
+  const c = state.counts;
+  const st = state.studentStatus;
+  const q = state.quiz;
+
+  /* 卡片 1：这是什么 + 语言切换 */
+  const card1 = `<section class="scard">
+    <p class="kicker">${ui.kicker}</p>
+    <div class="langs">${NOTICE.available_langs.map((l) =>
+      `<button type="button" class="lang-chip${l === lang ? ' is-active' : ''}" data-lang="${l}">${LANG_LABEL[l]}</button>`
+    ).join('')}</div>
+    <h1>${tr.title}</h1>
+    <p class="oneline">${tr.one_line}</p>
+    <p class="who">${ui.who}：${tr.who}</p>
+  </section>`;
+
+  /* 卡片 2：你要做什么（4 条有序行动项，大号数字圆点） */
+  const card2 = `<section class="scard">
+    <p class="kicker">02 · ${ui.actions}</p>
+    <ol class="actions">${tr.actions.map((a) =>
+      `<li><span class="act-num">${a.order}</span><span>${a.text}</span></li>`
+    ).join('')}</ol>
+  </section>`;
+
+  /* 卡片 3：截止 + 地点 + 材料 + 加入日历 */
+  const card3 = `<section class="scard">
+    <p class="kicker">03 · ${ui.when}</p>
+    <div class="dl-block">
+      <span class="dl-label">${ui.deadline}</span>
+      <div class="dl-big">${tr.deadline_text}</div>
+      <span class="countdown">${countdownText(lang)}</span>
+    </div>
+    <div class="kv">
+      <span class="dl-label">${ui.place}</span>
+      <p>${tr.place_text}</p>
+    </div>
+    <div class="kv">
+      <span class="dl-label">${ui.materials}</span>
+      <ul class="mats">${tr.materials.map((m) => `<li>${m}</li>`).join('')}</ul>
+    </div>
+    <a class="btn-cal" href="${buildIcsHref()}" download="lastmile-residence-permit.ics">📅 ${ui.addCal}</a>
+  </section>`;
+
+  /* 卡片 4：1 道小测，答错高亮原文片段、可重试，答对打勾 */
+  const quizBody = q.solved
+    ? `<div class="quiz-ok"><b>✓ ${ui.right}</b><p>${tr.quiz.explain}</p></div>`
+    : `${tr.quiz.options.map((o, i) =>
+        `<button type="button" class="opt${q.wrong === i ? ' is-wrong' : ''}" data-opt="${i}">${o}</button>`
+      ).join('')}
+      ${q.wrong !== null ? `<div class="span-box">
+        <span class="span-label">${ui.original}</span>
+        <p>${tr.quiz.source_span}</p>
+        <p class="span-hint">${ui.retry}</p>
+      </div>` : ''}`;
+  const card4 = `<section class="scard">
+    <p class="kicker">04 · ${ui.quiz}</p>
+    <h2 style="margin-bottom:14px">${tr.quiz.question}</h2>
+    ${quizBody}
+  </section>`;
+
+  /* 卡片 5：确认 / 已完成（含时间戳 + 本班进度） */
+  const card5 = st === 'confirmed'
+    ? `<section class="scard done-card">
+        <div class="done-mark">✓</div>
+        <h2 class="done-title">${ui.done}</h2>
+        <p class="done-time">${state.confirmedAt}</p>
+        <p class="done-sub">${ui.doneSub}</p>
+        <p class="done-count">${ui.classConfirm} <b class="mono">${c.confirmed}/${c.roster}</b> ${ui.confirmed}</p>
+      </section>`
+    : `<section class="scard">
+        <p class="kicker">05 · ${ui.confirm}</p>
+        ${st === 'help' ? `<p class="help-note">${ui.helpDone}</p>` : ''}
+        <button type="button" class="btn-main" data-act="confirm">${ui.yes}</button>
+        <button type="button" class="btn-ghost" data-act="help">${ui.help}</button>
+        <p class="fine">${ui.confirmFine}</p>
+      </section>`;
+
+  /* 卡片 6：官方渠道（居留许可类必须有） */
+  const card6 = `<section class="scard">
+    <p class="kicker">06 · ${ui.official}</p>
+    <div class="official">
+      <h2>${ui.officialTitle}</h2>
+      <p>${ui.officialBody}</p>
+      <ul class="contacts">${NOTICE.contacts.map((ct) =>
+        `<li><b>${ct.name} · ${ct.role}</b><a class="tel" href="tel:${ct.phone.replace(/-/g, '')}">${ct.phone}</a></li>`
+      ).join('')}</ul>
+      <p class="office-hours">${ui.hours}</p>
+      <p class="official-foot">${ui.officialFoot}</p>
+    </div>
+  </section>`;
+
+  $('student-root').innerHTML = card1 + card2 + card3 + card4 + card5 + card6;
+}
+
+function renderAll() {
+  renderCounselor();
+  renderStudent();
+}
+
+/* ---------- 9. 回执：学生视角点确认 → 辅导员看板同步 +1 ---------- */
+function submitReceipt(kind) {
+  const c = state.counts;
+  if (kind === 'confirm' && state.studentStatus !== 'confirmed') {
+    state.studentStatus = 'confirmed';
+    state.confirmedAt = stamp();
+    c.confirmed += 1;
+    if (c.seen > 0) c.seen -= 1;          // 未读数由总数推导，这里只挪动「已读未确认」
+    const me = STUDENTS.find((s) => s.id === ME_ID);
+    if (me) {
+      me.status = 'confirmed';
+      me.confirmed_at = state.confirmedAt;
+    }
+    $('sim-hint').textContent = '学生视角里 NGUYEN Van Anh 刚点了确认：已确认 +1，进度条已前进。';
+  }
+  if (kind === 'help' && state.studentStatus !== 'help') {
+    state.studentStatus = 'help';
+    c.help += 1;
+    if (c.seen > 0) c.seen -= 1;
+  }
+  renderAll();
+}
+
+/* ---------- 10. 催办文案 ---------- */
+function buildNudge() {
+  const targets = STUDENTS.filter((s) => s.status !== 'confirmed');
+  if (!targets.length) {
+    return '本名单内的 10 位同学都已经确认了，不需要再催办。\n（全班 114 人中仍有未确认的同学，可在真实系统里导出完整名单。）';
+  }
+  const names = targets.map((s) => s.name).join('、');
+  return [
+    '【催办 · 居留许可延期】2026级国际学生同学：',
+    '下列同学还没有点确认。截止时间是 11月25日（周三）17:00，逾期居留许可过期将按非法居留处理，后果自负。',
+    '',
+    `未确认（${targets.length} 人）：${names}`,
+    '',
+    '点开卡片，读完点一下「我已知晓，会按时完成」，30 秒就能完成：',
+    'demo.html#/s/ntc_1',
+    '',
+    '需要帮助（护照补办、时间冲突）请直接联系国际学生事务中心，或在卡片里点「我有困难」。',
+    '—— 国际学生事务中心 张老师 028-87092233'
+  ].join('\n');
+}
+
+/* 复制：优先 Clipboard API，file:// 下失败则退回 textarea + execCommand */
+function copyText(text, done) {
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    done(ok);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => done(true), fallback);
+  } else {
+    fallback();
+  }
+}
+
+/* ---------- 11. 视角切换 ---------- */
+function setView(view) {
+  state.view = view;
+  document.body.dataset.view = view;
+  document.querySelectorAll('[data-target]').forEach((btn) => {
+    const on = btn.dataset.target === view;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  if (view === 'student') {
+    if (state.studentStatus === 'unread') state.studentStatus = 'seen'; // 打开即已读
+    renderStudent();
+  }
+}
+
+/* ---------- 12. 事件绑定 ---------- */
+document.querySelectorAll('[data-target]').forEach((btn) => {
+  btn.addEventListener('click', () => setView(btn.dataset.target));
+});
+
+/* 学生端：事件委托（重渲染不会丢监听） */
+$('student-root').addEventListener('click', (e) => {
+  const langBtn = e.target.closest('[data-lang]');
+  if (langBtn) {
+    state.lang = langBtn.dataset.lang;
+    state.quiz = { solved: false, wrong: null }; // 换语言 = 换一道同题的小测
+    renderStudent();
+    return;
+  }
+  const optBtn = e.target.closest('[data-opt]');
+  if (optBtn && !state.quiz.solved) {
+    const idx = Number(optBtn.dataset.opt);
+    if (idx === NOTICE.translations[state.lang].quiz.answer_index) {
+      state.quiz.solved = true;
+      state.quiz.wrong = null;
+    } else {
+      state.quiz.wrong = idx;
+    }
+    renderStudent();
+    return;
+  }
+  const actBtn = e.target.closest('[data-act]');
+  if (actBtn) submitReceipt(actBtn.dataset.act);
+});
+
+$('btn-nudge').addEventListener('click', () => {
+  const box = $('nudge-box');
+  $('nudge-text').textContent = buildNudge();
+  box.hidden = false;
+  $('btn-copy').textContent = '复制文案';
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); // 演示时不用手动找这段文案
+});
+
+$('btn-copy').addEventListener('click', () => {
+  const btn = $('btn-copy');
+  copyText($('nudge-text').textContent, (ok) => {
+    btn.textContent = ok ? '已复制 ✓' : '请手动选中复制';
+    setTimeout(() => { btn.textContent = '复制文案'; }, 1800);
+  });
+});
+
+$('btn-simulate').addEventListener('click', () => {
+  const target = STUDENTS.find((s) => s.status === 'unread')
+    || STUDENTS.find((s) => s.status === 'seen');
+  if (!target) {
+    $('sim-hint').textContent = '名单内 10 位同学都已确认，没有可模拟的对象了。';
+    return;
+  }
+  target.status = 'confirmed';
+  target.confirmed_at = stamp();
+  state.counts.confirmed += 1;
+  if (state.counts.seen > 0) state.counts.seen -= 1;
+  renderAll();
+  $('sim-hint').textContent = `已模拟 ${target.name}（${target.id}）提交回执：已确认 +1，进度条已前进，名单状态点已变绿。`;
+});
+
+/* ---------- 13. 启动 ---------- */
+$('raw-text').textContent = RAW_TEXT;
+renderAll();
+/* 支持直接打开 demo.html#/s/ntc_1 就落到学生视角（催办文案里那条链接） */
+if (location.hash.startsWith('#/s/')) setView('student');
+</script>
+</body>
+</html>

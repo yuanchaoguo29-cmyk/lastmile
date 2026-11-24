@@ -1,0 +1,458 @@
+/* 助理账号段样式 —— 归属 staff-ui agent。选择器一律以 .lm-staff 开头。
+   卡片、输入框、按钮的底子跟设置面板另外两段一致：深色卡、1px --line、圆角 14px。
+   颜色只用 tokens.css 的变量（mint / amber / red / ink / muted / navy / line）。 */
+
+/* ---------- 1. 段容器 ---------- */
+
+.lm-staff {
+  margin-top: 14px;
+  padding: 16px 16px 18px;
+  background: var(--navy-800);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  min-width: 0;
+}
+
+.lm-staff :focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+
+.lm-staff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lm-staff-count {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+
+.lm-staff-desc {
+  margin: 8px 0 14px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+/* ---------- 2. 成员列表 ---------- */
+
+.lm-staff-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+
+.lm-staff-lhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 0 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.lm-staff-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'main acts'
+    'meta meta';
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  background: rgba(7, 13, 23, 0.42);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.lm-staff-row:hover {
+  border-color: rgba(143, 163, 191, 0.42);
+}
+
+.lm-staff-row.is-off {
+  background: rgba(7, 13, 23, 0.24);
+}
+
+.lm-staff-main {
+  grid-area: main;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.lm-staff-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lm-staff-row.is-off .lm-staff-name {
+  color: var(--muted);
+}
+
+.lm-staff-state {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.lm-staff-state.is-on {
+  color: var(--mint);
+  border-color: rgba(61, 220, 151, 0.42);
+  background: rgba(61, 220, 151, 0.08);
+}
+
+.lm-staff-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.lm-staff-state.is-on .lm-staff-dot {
+  background: var(--mint);
+  box-shadow: 0 0 6px rgba(61, 220, 151, 0.7);
+}
+
+/* 行内三个操作：停用 / 重置密码 / 删除 */
+.lm-staff-acts {
+  grid-area: acts;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.lm-staff-acts .lm-staff-act {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.lm-staff-acts .lm-staff-act.is-danger {
+  color: var(--red);
+  border-color: rgba(255, 107, 107, 0.42);
+}
+
+.lm-staff-acts .lm-staff-act.is-danger:hover {
+  color: var(--navy-900);
+  background: var(--red);
+  border-color: var(--red);
+}
+
+/* 密码掩码 / 最近登录：小一号的等宽行 */
+.lm-staff-meta {
+  grid-area: meta;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.lm-staff-meta-k {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.85;
+  flex: 0 0 auto;
+}
+
+.lm-staff-meta-v {
+  font-size: 11.5px;
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lm-staff-meta-v.is-mono {
+  font-family: var(--font-mono);
+}
+
+.lm-staff-meta-v.is-dim {
+  color: var(--muted);
+  font-family: var(--font-sans);
+}
+
+.lm-staff-meta-dot {
+  flex: 0 0 auto;
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+/* ---------- 3. 空状态 ---------- */
+
+.lm-staff-empty {
+  margin: 0 0 14px;
+  padding: 18px 16px;
+  background: rgba(7, 13, 23, 0.45);
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ---------- 4. 一次性密码框（只显示这一次） ---------- */
+
+@keyframes lm-staff-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lm-staff-secret {
+  margin: 0 0 12px;
+  scroll-margin-block: 14px;
+  padding: 13px 14px 14px;
+  background: rgba(245, 181, 71, 0.08);
+  border: 1px solid rgba(245, 181, 71, 0.62);
+  border-left: 3px solid var(--amber);
+  border-radius: 12px;
+  animation: lm-staff-rise 0.18s ease-out;
+}
+
+.lm-staff-secret-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lm-staff-secret-head .lm-counselor-eyebrow {
+  color: var(--amber);
+  opacity: 0.85;
+}
+
+.lm-staff-secret-name {
+  flex: 0 0 auto;
+  max-width: 52%;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--amber);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lm-staff-secret-tip {
+  margin: 6px 0 10px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.lm-staff-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lm-staff-secret-key {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--navy-900);
+  border: 1px dashed rgba(245, 181, 71, 0.5);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  color: var(--amber);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+.lm-staff-secret-row .lm-counselor-copybtn {
+  flex: 0 0 auto;
+  min-height: 40px;
+}
+
+.lm-staff-secret-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* ---------- 5. 段内提示 ---------- */
+
+.lm-staff-msg {
+  margin: 10px 0 0;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.lm-staff-msg.is-err {
+  color: var(--red);
+  background: rgba(255, 107, 107, 0.08);
+  border-color: rgba(255, 107, 107, 0.3);
+}
+
+.lm-staff-loaderr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.lm-staff-loaderr .lm-staff-msg {
+  flex: 1 1 200px;
+  margin: 0;
+}
+
+/* ---------- 6. 添加助理 ---------- */
+
+.lm-staff-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 4px;
+}
+
+.lm-staff-field {
+  min-width: 0;
+}
+
+.lm-staff-label {
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.lm-staff-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--navy-900);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.lm-staff-input:hover {
+  border-color: rgba(143, 163, 191, 0.42);
+}
+
+.lm-staff-input:focus {
+  outline: none;
+  border-color: var(--mint);
+  box-shadow: 0 0 0 3px rgba(61, 220, 151, 0.14);
+}
+
+.lm-staff-input::placeholder {
+  color: rgba(143, 163, 191, 0.62);
+}
+
+.lm-staff-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.lm-staff-addbtn {
+  min-height: 44px;
+  padding: 0 16px;
+}
+
+.lm-staff-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---------- 7. 窄屏：操作换到单独一行 ---------- */
+
+@media (max-width: 560px) {
+  .lm-staff-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'main'
+      'meta'
+      'acts';
+  }
+
+  .lm-staff-acts {
+    justify-content: flex-start;
+  }
+
+  .lm-staff-lhead {
+    display: none;
+  }
+
+  .lm-staff-add {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lm-staff-addbtn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-staff-secret {
+    animation: none;
+  }
+}

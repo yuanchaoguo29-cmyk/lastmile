@@ -1,0 +1,49 @@
+/* 全局重置 —— 冻结。页面级样式写各自的 student.css / counselor.css。 */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+/* 学生端/辅导员端用这两个根类隔离样式作用域 */
+.lm-root {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.lm-student {
+  background: var(--s-bg);
+  color: var(--s-ink);
+}
+
+.lm-counselor {
+  background: var(--navy-800);
+  color: var(--ink);
+}

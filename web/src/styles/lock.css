@@ -1,0 +1,163 @@
+
+/* ---------- 门禁（落在所有其他辅导员样式之后，避免被覆盖） ---------- */
+
+.lm-lock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 28px 20px;
+  background:
+    radial-gradient(760px 420px at 50% -10%, rgba(61, 220, 151, 0.07), transparent 70%),
+    var(--navy-900);
+}
+
+.lm-lock-card {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  padding: 28px 26px 22px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--navy-700);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.lm-lock-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.lm-lock-mark {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  border: 1px solid var(--mint);
+  color: var(--mint);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.lm-lock-brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lm-lock-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+.lm-lock-sub {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+}
+
+.lm-lock-title {
+  margin: 0 0 8px;
+  font-size: 24px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.lm-lock-desc {
+  margin: 0 0 22px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.lm-lock-label {
+  margin-bottom: 7px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.lm-lock-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--navy-900);
+  color: var(--ink);
+  font-size: 16px;
+  letter-spacing: 0.14em;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.lm-lock-input::placeholder {
+  color: var(--navy-600);
+  letter-spacing: 0.2em;
+}
+
+.lm-lock-input:focus {
+  border-color: var(--mint-2);
+  box-shadow: 0 0 0 3px rgba(61, 220, 151, 0.14);
+}
+
+.lm-lock-err {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--red);
+}
+
+.lm-lock-btn {
+  width: 100%;
+  min-height: 50px;
+  margin-top: 16px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--mint);
+  color: var(--navy-900);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.lm-lock-btn:hover:not(:disabled) {
+  background: #4ceaa5;
+}
+
+.lm-lock-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.lm-lock-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.lm-lock-note {
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 480px) {
+  .lm-lock-card {
+    padding: 24px 20px 20px;
+  }
+  .lm-lock-title {
+    font-size: 21px;
+  }
+}

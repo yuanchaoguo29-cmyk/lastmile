@@ -1,0 +1,1467 @@
+/* 学生端样式 —— 归属 C（学生端）。所有选择器以 .lm-student 开头，避免污染辅导员端。
+   浅色、大字、高对比：正文 18px，行动项 20px/1.5，大标题 30-34px/1.25。
+   颜色只用 tokens.css 的 --s-* 变量；浅色底由 color-mix 从变量派生，不手写色值。 */
+
+/* ---------- 根与版心 ---------- */
+
+.lm-student {
+  --lm-body: 18px;
+  --lm-act: 20px;
+  --lm-hero: 30px;
+  --lm-h2: 20px;
+  --lm-title: 19px;
+  --lm-gap: 16px;
+
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--s-bg);
+  color: var(--s-ink);
+  font-size: var(--lm-body);
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* 三档字号：A- / A+ */
+.lm-student--fs0 {
+  --lm-body: 16px;
+  --lm-act: 18px;
+  --lm-hero: 26px;
+  --lm-h2: 18px;
+  --lm-title: 17px;
+}
+.lm-student--fs2 {
+  --lm-body: 20px;
+  --lm-act: 23px;
+  --lm-hero: 34px;
+  --lm-h2: 23px;
+  --lm-title: 21px;
+}
+
+.lm-student *,
+.lm-student *::before,
+.lm-student *::after {
+  box-sizing: border-box;
+}
+
+.lm-student__page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lm-gap);
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px 20px calc(32px + env(safe-area-inset-bottom));
+}
+
+.lm-student--sticky .lm-student__page {
+  padding-bottom: calc(104px + env(safe-area-inset-bottom));
+}
+
+.lm-student:focus-visible,
+.lm-student__btn:focus-visible,
+.lm-student__option:focus-visible,
+.lm-student__chip:focus-visible,
+.lm-student__lang:focus-visible,
+.lm-student__input:focus-visible,
+.lm-student__textarea:focus-visible,
+.lm-student__fold:focus-visible,
+.lm-student__official-link:focus-visible,
+.lm-student__banner-btn:focus-visible {
+  outline: 3px solid var(--s-accent);
+  outline-offset: 2px;
+}
+
+.lm-student__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- 品牌条 ---------- */
+
+.lm-student__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 2px 0;
+}
+
+.lm-student__brand-name {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--s-ink);
+}
+
+.lm-student__brand-tag {
+  font-size: 12px;
+  color: var(--s-muted);
+}
+
+/* ---------- 图例：颜色 = 段落类型 ----------
+   第一张卡上面一行很轻的三色说明，帮学生建立「往下滑会换颜色」的预期。
+   11.5px / --s-muted，比正文轻一档，不抢视觉；圆点只是装饰，语义全在文字上。 */
+
+.lm-student__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: 0; /* 是个 <p>，不清掉默认外边距会把页面 16px 间距体系顶开 */
+  padding: 0 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  color: var(--s-muted);
+}
+
+.lm-student__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.lm-student__legend-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* 灰 = 通知（不用 --s-line，太浅在白底上看不见，取 muted 的中间调） */
+.lm-student__legend-dot--notice {
+  background: color-mix(in srgb, var(--s-muted) 55%, var(--s-bg));
+}
+
+.lm-student__legend-dot--quiz {
+  background: var(--s-quiz);
+}
+
+.lm-student__legend-dot--action {
+  background: var(--s-accent);
+}
+
+/* ---------- 卡片 ---------- */
+
+.lm-student__card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  background: var(--s-bg);
+  border: 1px solid var(--s-line);
+  border-radius: 18px;
+}
+
+.lm-student__card--what {
+  gap: 10px;
+}
+
+.lm-student__card--do {
+  gap: 14px;
+}
+
+.lm-student__card--deadline {
+  background: var(--s-surface);
+}
+
+/* ---------- 三色分层：通知 = 中性 / 答题 = 蓝 / 动作确认 = 薄荷 ----------
+   通知卡（这是什么 / 你要做什么 / 截止地点材料 / 官方渠道 / 中文原文）保持白底
+   加 1px --s-line，不加色条。只有答题卡和确认卡换底色 + 左侧 4px 竖条，
+   学生滑到这里能看出「轮到我动手了」。
+   竖条走 border-left：左侧圆角收到 6px，4px 竖条的端头才不会在 18px 圆角里糊掉
+   （和下面 .lm-student__official 的处理方式一致）。
+   左内边距 20 → 17：竖条比 1px 边框多占 3px，减掉这 3px，卡片文字仍与上下通知卡对齐。 */
+.lm-student__card--quiz {
+  background: var(--s-quiz-soft);
+  border-color: var(--s-quiz-line);
+  border-left: 4px solid var(--s-quiz);
+  border-radius: 6px 18px 18px 6px;
+  padding-left: 17px;
+}
+
+.lm-student__card--confirm {
+  background: var(--s-action-soft);
+  border-color: var(--s-action-line);
+  border-left: 4px solid var(--s-accent);
+  border-radius: 6px 18px 18px 6px;
+  padding-left: 17px;
+}
+
+.lm-student__card--error {
+  border-color: var(--s-danger);
+}
+
+.lm-student__card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* 英文小标签：11px / .12em / 大写 / muted */
+.lm-student__eyebrow {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--s-muted);
+}
+
+/* ---------- 排版 ---------- */
+
+.lm-student__title {
+  margin: 0;
+  font-size: var(--lm-title);
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--s-muted);
+}
+
+/* one_line 是全页最大的字 */
+.lm-student__oneline {
+  margin: 0;
+  font-size: var(--lm-hero);
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  color: var(--s-ink);
+  text-wrap: balance;
+}
+
+.lm-student__what {
+  margin: 0;
+  font-size: var(--lm-body);
+  line-height: 1.6;
+  color: var(--s-ink);
+}
+
+.lm-student__who {
+  margin: 0;
+  font-size: 15px;
+  color: var(--s-muted);
+}
+
+.lm-student__h2 {
+  margin: 0;
+  font-size: var(--lm-h2);
+  line-height: 1.35;
+  font-weight: 700;
+  color: var(--s-ink);
+}
+
+.lm-student__h2--big {
+  font-size: calc(var(--lm-h2) + 2px);
+  line-height: 1.3;
+}
+
+.lm-student__hint {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--s-muted);
+}
+
+.lm-student__hint--error {
+  color: var(--s-danger);
+  font-weight: 600;
+}
+
+.lm-student__footer {
+  margin: 4px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--s-muted);
+}
+
+.lm-student__label {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--s-ink);
+}
+
+.lm-student__inline-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--s-danger);
+  background: var(--s-surface);
+  background: color-mix(in srgb, var(--s-danger) 8%, var(--s-bg));
+}
+
+.lm-student__err-detail {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--s-muted);
+  word-break: break-word;
+}
+
+/* ---------- 工具条：朗读 / 字号 / 语言 ---------- */
+
+.lm-student__tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lm-student__fontctl {
+  display: flex;
+  gap: 6px;
+}
+
+.lm-student__chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--s-line);
+  border-radius: 999px;
+  background: var(--s-bg);
+  color: var(--s-ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lm-student__chip--txt {
+  padding: 6px 14px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-student__chip.is-on {
+  border-color: var(--s-accent);
+  background: color-mix(in srgb, var(--s-accent) 12%, var(--s-bg));
+  color: var(--s-accent);
+}
+
+.lm-student__chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---------- 语言切换：6 个语种常驻 ----------
+   未生成的语种只是视觉上轻一点（不加粗、灰字），照样可点：
+   点下去服务端当场翻译，禁用会让看不懂中文的学生彻底没路走。 */
+
+.lm-student__langbox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lm-student__langs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lm-student__lang {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px; /* 视觉下限 36px，这里按触控下限 44px */
+  min-width: 44px;
+  padding: 6px 14px;
+  border: 1px solid var(--s-line);
+  border-radius: 999px;
+  background: var(--s-bg);
+  color: var(--s-muted);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+/* 服务端已经有这个语言：字重和颜色都提上来 */
+.lm-student__lang.is-ready {
+  color: var(--s-ink);
+  font-weight: 600;
+}
+
+/* 选中态（含「刚点下去、正在翻译」的那个） */
+.lm-student__lang.is-active {
+  border-color: var(--s-accent);
+  background: var(--s-accent);
+  color: var(--s-bg);
+  font-weight: 700;
+}
+
+/* 正在翻译这个语种：加 spinner，宽度变化很小，不换行也不跳高 */
+.lm-student__lang.is-pending {
+  cursor: progress;
+}
+
+/* 语种名不折行：「Tiếng Việt」被挤成两行会让 chip 突然变高 */
+.lm-student__lang-name {
+  white-space: nowrap;
+}
+
+.lm-student__spin {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, var(--s-accent) 30%, transparent);
+  border-top-color: var(--s-accent);
+  border-radius: 50%;
+  animation: lm-student-spin 0.9s linear infinite;
+}
+
+.lm-student__lang.is-active .lm-student__spin {
+  border-color: color-mix(in srgb, var(--s-bg) 45%, transparent);
+  border-top-color: var(--s-bg);
+}
+
+@keyframes lm-student-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 一行固定 22px：翻译中 / 该语言不可用。出现和消失都不顶动下面的标题。 */
+.lm-student__langnote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.lm-student__langnote.is-pending {
+  color: var(--s-accent);
+}
+
+.lm-student__langnote.is-warn {
+  color: var(--s-warn);
+}
+
+/* ---------- 翻译中：顶部细进度条 + 原内容变淡 ----------
+   内容不清空、不闪白，只降透明度；语言切换器本身保持清晰可点（要能连点换语言）。 */
+
+.lm-student__transtop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  height: 3px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--s-accent) 18%, var(--s-bg));
+}
+
+.lm-student__transtop::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  border-radius: 999px;
+  background: var(--s-accent);
+  animation: lm-student-sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes lm-student-sweep {
+  0% {
+    left: -38%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.lm-student__card,
+.lm-student__title,
+.lm-student__oneline,
+.lm-student__what,
+.lm-student__who,
+.lm-student__original,
+.lm-student__social,
+.lm-student__footer,
+.lm-student__done {
+  transition: opacity 0.18s ease;
+}
+
+.lm-student__page.is-translating .lm-student__card:not(.lm-student__card--what),
+.lm-student__page.is-translating .lm-student__title,
+.lm-student__page.is-translating .lm-student__oneline,
+.lm-student__page.is-translating .lm-student__what,
+.lm-student__page.is-translating .lm-student__who,
+.lm-student__page.is-translating .lm-student__original,
+.lm-student__page.is-translating .lm-student__social,
+.lm-student__page.is-translating .lm-student__footer,
+.lm-student__page.is-translating .lm-student__done {
+  opacity: 0.45;
+}
+
+/* ---------- 行动项（视觉重心） ---------- */
+
+.lm-student__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lm-student__action {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.lm-student__action-num {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--s-accent);
+  border-radius: 50%;
+  color: var(--s-accent);
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-student__action-text {
+  font-size: var(--lm-act);
+  line-height: 1.5;
+  font-weight: 600;
+  padding-top: 2px;
+}
+
+/* ---------- 截止 / 地点 / 材料 ---------- */
+
+.lm-student__when {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lm-student__when-time {
+  margin: 0;
+  font-size: calc(var(--lm-hero) - 2px);
+  line-height: 1.25;
+  font-weight: 800;
+  color: var(--s-accent);
+  letter-spacing: -0.01em;
+}
+
+.lm-student__countdown {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--s-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-student__countdown.is-warn {
+  color: var(--s-warn);
+}
+
+.lm-student__countdown.is-over {
+  color: var(--s-danger);
+}
+
+.lm-student__overdue-note {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--s-danger);
+}
+
+.lm-student__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+}
+
+.lm-student__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lm-student__fact dt {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--s-muted);
+}
+
+.lm-student__fact dd {
+  margin: 0;
+  font-size: var(--lm-body);
+  line-height: 1.55;
+  font-weight: 600;
+  color: var(--s-ink);
+}
+
+.lm-student__materials {
+  margin: 0;
+  padding-left: 20px;
+  font-weight: 600;
+}
+
+.lm-student__materials li {
+  margin: 2px 0;
+}
+
+.lm-student__consequence {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--s-warn);
+  background: color-mix(in srgb, var(--s-warn) 10%, var(--s-bg));
+}
+
+/* ---------- 按钮 ---------- */
+
+.lm-student__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 52px;
+  padding: 13px 18px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+.lm-student__btn--primary {
+  background: var(--s-accent);
+  border-color: var(--s-accent);
+  color: var(--s-bg);
+}
+
+.lm-student__btn--primary:active {
+  transform: translateY(1px);
+}
+
+.lm-student__btn--secondary {
+  background: var(--s-accent);
+  border-color: var(--s-accent);
+  color: var(--s-bg);
+  min-height: 50px;
+}
+
+.lm-student__btn--ghost {
+  background: var(--s-bg);
+  border-color: var(--s-line);
+  color: var(--s-ink);
+}
+
+.lm-student__btn--text {
+  min-height: 44px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--s-muted);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.lm-student__btn--faint {
+  color: var(--s-muted);
+  font-size: 14px;
+  opacity: 0.85;
+}
+
+/* 主 CTA：≥56px，全宽，accent 底白字 */
+.lm-student__btn--cta {
+  min-height: 56px;
+  font-size: 18px;
+  border-radius: 18px;
+}
+
+.lm-student__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
+.lm-student__cal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lm-student__cal-msg {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--s-accent);
+}
+
+/* ---------- 小测 ---------- */
+
+/* 蓝色小标签：字号 / 字距沿用 .lm-student__eyebrow，只换颜色 */
+.lm-student__card--quiz .lm-student__eyebrow {
+  color: var(--s-quiz);
+}
+
+/* 标题左边的问号：深色题干 + 蓝色图标，提示「这里要你回答」 */
+.lm-student__quiz-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.lm-student__quiz-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  margin-top: 1px; /* 让图标与标题首行视觉对齐，不改变行高 */
+  color: var(--s-quiz);
+}
+
+/* 图标跟着字号三档走（A- / A+ 时和标题同比例），不写死 22px */
+.lm-student__quiz-badge svg {
+  width: 1.05em;
+  height: 1.05em;
+}
+
+/* 题干占据剩余宽度：长句照常折行，图标不跟着缩 */
+.lm-student__quiz-qtext {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lm-student__options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+/* 选项：白底压在浅蓝卡上，1px 浅蓝边；未作答时 hover / 键盘焦点才提到实蓝 */
+.lm-student__option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px solid var(--s-quiz-line);
+  border-radius: 14px;
+  background: var(--s-bg);
+  color: var(--s-ink);
+  font-size: 17px;
+  line-height: 1.45;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 已选 / 已答对 / 已答错都不吃这条蓝边：红和绿的语义必须压过蓝 */
+.lm-student__option:not(.is-picked):not(.is-right):not(.is-wrong):hover,
+.lm-student__option:not(.is-picked):not(.is-right):not(.is-wrong):focus-visible {
+  border-color: var(--s-quiz);
+}
+
+/* 焦点外圈在蓝卡里也走蓝，聚焦位置与卡片同色；错误 / 正确态仍保留各自的绿框红框 */
+.lm-student__card--quiz .lm-student__option:not(.is-right):not(.is-wrong):focus-visible {
+  outline-color: var(--s-quiz);
+}
+
+/* 选项字母圈。默认中性；小测卡里改成浅蓝底 + 蓝字（见下条），
+   白底选项不靠边框也能认出是可点的一项。 */
+.lm-student__option-letter {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--s-surface);
+  color: var(--s-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lm-student__card--quiz .lm-student__option:not(.is-right):not(.is-wrong) .lm-student__option-letter {
+  background: var(--s-quiz-soft);
+  color: var(--s-quiz);
+}
+
+.lm-student__option-text {
+  flex: 1 1 auto;
+}
+
+.lm-student__option.is-picked {
+  border-color: var(--s-accent);
+}
+
+.lm-student__option.is-right {
+  border-color: var(--s-accent);
+  background: color-mix(in srgb, var(--s-accent) 10%, var(--s-bg));
+}
+
+.lm-student__option.is-right .lm-student__option-letter {
+  background: var(--s-accent);
+  color: var(--s-bg);
+}
+
+.lm-student__option.is-wrong {
+  border-color: var(--s-danger);
+  background: color-mix(in srgb, var(--s-danger) 8%, var(--s-bg));
+}
+
+.lm-student__option:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.lm-student__option-tick {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--s-accent);
+}
+
+.lm-student__quiz-ok {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 0;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--s-accent);
+}
+
+.lm-student__quiz-wrong {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lm-student__quiz-wrong-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--s-warn);
+}
+
+.lm-student__explain {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--s-muted);
+}
+
+/* 原文高亮块：左侧 4px 竖线 + 浅绿底 */
+.lm-student__hl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-left: 4px solid var(--s-accent);
+  border-radius: 6px 12px 12px 6px;
+  background: var(--s-surface);
+  background: color-mix(in srgb, var(--s-accent) 9%, var(--s-bg));
+}
+
+.lm-student__hl-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--s-accent);
+}
+
+.lm-student__hl-text {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.6;
+  font-weight: 600;
+  color: var(--s-ink);
+  white-space: pre-wrap;
+}
+
+/* ---------- 确认卡 / 困难输入 ---------- */
+
+.lm-student__card--confirm {
+  gap: 14px;
+}
+
+/* 薄荷色小标签：这是「要按的按钮」那一段 */
+.lm-student__card--confirm .lm-student__eyebrow {
+  color: var(--s-accent);
+}
+
+/* 按钮上方再看一眼截止时间 */
+.lm-student__cta-when {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.lm-student__cta-when strong {
+  font-size: calc(var(--lm-h2) + 1px);
+  line-height: 1.3;
+  font-weight: 800;
+  color: var(--s-accent);
+  letter-spacing: -0.01em;
+}
+
+.lm-student__help {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.lm-student__textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 12px 14px;
+  border: 1px solid var(--s-line);
+  border-radius: 14px;
+  background: var(--s-bg);
+  color: var(--s-ink);
+  font-size: 17px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.lm-student__input {
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--s-line);
+  border-radius: 14px;
+  background: var(--s-bg);
+  color: var(--s-ink);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.lm-student__textarea::placeholder,
+.lm-student__input::placeholder {
+  color: var(--s-muted);
+  opacity: 0.8;
+}
+
+/* ---------- 官方渠道 ---------- */
+
+.lm-student__official {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--s-line);
+  border-left: 4px solid var(--s-accent);
+  border-radius: 6px 16px 16px 6px;
+  background: var(--s-surface);
+}
+
+.lm-student__official-title {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.4;
+  font-weight: 800;
+  color: var(--s-ink);
+}
+
+.lm-student__official-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lm-student__official-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lm-student__official-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--s-line);
+  border-radius: 12px;
+  background: var(--s-bg);
+  color: var(--s-accent);
+  font-size: 16px;
+  font-weight: 700;
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.lm-student__contact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.lm-student__contact-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--s-ink);
+}
+
+.lm-student__contact-note {
+  width: 100%;
+  font-size: 13px;
+  color: var(--s-muted);
+}
+
+.lm-student__official-note {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--s-muted);
+}
+
+/* ---------- 中文原文折叠 ---------- */
+
+.lm-student__original {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--s-line);
+  padding-top: 12px;
+}
+
+.lm-student__fold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--s-muted);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lm-student__original-body {
+  padding: 14px;
+  border: 1px solid var(--s-line);
+  border-radius: 14px;
+  background: var(--s-surface);
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--s-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------- 进度 ---------- */
+
+.lm-student__social {
+  padding: 2px 4px 0;
+}
+
+.lm-student__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lm-student__progress-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.lm-student__progress-num {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--s-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.lm-student__progress-label {
+  font-size: 13px;
+  color: var(--s-muted);
+}
+
+.lm-student__bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--s-line);
+  overflow: hidden;
+}
+
+.lm-student__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--s-accent);
+  transition: width 0.3s ease;
+}
+
+/* ---------- 吸底主按钮（回执摩擦最低） ---------- */
+
+.lm-student__sticky {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  padding: 10px 20px calc(10px + env(safe-area-inset-bottom));
+  background: var(--s-bg);
+  border-top: 1px solid var(--s-line);
+}
+
+.lm-student__sticky > .lm-student__btn {
+  max-width: 440px;
+}
+
+/* ---------- 完成态 ---------- */
+
+.lm-student__done {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lm-gap);
+}
+
+.lm-student__done-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 16px 8px;
+  text-align: center;
+}
+
+.lm-student__done-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: var(--s-surface);
+  background: color-mix(in srgb, var(--s-accent) 12%, var(--s-bg));
+  color: var(--s-accent);
+}
+
+.lm-student__done-title {
+  margin: 0;
+  font-size: var(--lm-hero);
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--s-ink);
+}
+
+.lm-student__done-body {
+  margin: 0;
+  font-size: var(--lm-body);
+  line-height: 1.55;
+  color: var(--s-ink);
+}
+
+.lm-student__done-time {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--s-muted);
+}
+
+.lm-student__done-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+/* 完成态里的「做什么 + 什么时候」回顾 */
+.lm-student__card--recap {
+  gap: 10px;
+}
+
+.lm-student__recap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lm-student__recap-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 17px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--s-ink);
+}
+
+.lm-student__recap-num {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--s-accent);
+  border-radius: 50%;
+  color: var(--s-accent);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.lm-student__recap-when {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--s-line);
+}
+
+.lm-student__recap-when strong {
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 800;
+  color: var(--s-accent);
+}
+
+/* ---------- 身份输入层 ---------- */
+
+.lm-student__sheet-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.lm-student__sheet-mask {
+  position: absolute;
+  inset: 0;
+  background: var(--s-ink);
+  opacity: 0.32;
+}
+
+.lm-student__sheet {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  max-height: 92vh;
+  max-height: 92dvh;
+  overflow-y: auto;
+  padding: 22px 20px calc(18px + env(safe-area-inset-bottom));
+  border: 1px solid var(--s-line);
+  border-radius: 20px 20px 0 0;
+  background: var(--s-bg);
+  color: var(--s-ink);
+  box-shadow: 0 -8px 30px color-mix(in srgb, var(--s-ink) 12%, transparent);
+}
+
+.lm-student__sheet form {
+  margin: 12px 0 4px;
+}
+
+/* ---------- 骨架屏 ---------- */
+
+.lm-student__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 0;
+}
+
+.lm-student__sk-line {
+  height: 16px;
+  border-radius: 8px;
+  background: var(--s-surface);
+}
+
+.lm-student__sk-line--xs {
+  width: 30%;
+  height: 11px;
+}
+
+.lm-student__sk-line--sm {
+  width: 55%;
+}
+
+.lm-student__sk-line--lg {
+  width: 85%;
+  height: 24px;
+}
+
+.lm-student__sk-line--xl {
+  width: 100%;
+  height: 34px;
+}
+
+.lm-student__sk-card {
+  height: 120px;
+  border-radius: 18px;
+  border: 1px solid var(--s-line);
+  background: var(--s-surface);
+}
+
+/* ---------- 错误态 ---------- */
+
+.lm-student__err-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--s-danger);
+  background: color-mix(in srgb, var(--s-danger) 10%, var(--s-bg));
+}
+
+.lm-student__err-body {
+  margin: 0;
+  font-size: var(--lm-body);
+  line-height: 1.55;
+  color: var(--s-ink);
+}
+
+.lm-student__banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--s-line);
+  border-radius: 14px;
+  background: var(--s-surface);
+  background: color-mix(in srgb, var(--s-warn) 10%, var(--s-bg));
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--s-warn);
+}
+
+/* 语言没切换成功时的提示：一句话标题 + 一句人话说明 + 重试 */
+.lm-student__banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lm-student__banner-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.lm-student__banner-body {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--s-ink);
+}
+
+.lm-student__banner-btn {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid var(--s-line);
+  border-radius: 12px;
+  background: var(--s-bg);
+  color: var(--s-ink);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ---------- 减少动效 ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-student *,
+  .lm-student *::before,
+  .lm-student *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- 窄屏微调 ---------- */
+
+@media (max-width: 360px) {
+  .lm-student__page {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .lm-student__card {
+    padding: 16px;
+  }
+  /* 上面把内边距压到 16px，这两张卡的左侧 4px 竖条还要补回 3px，
+     文字才不会比相邻通知卡往右错 3px */
+  .lm-student__card--quiz,
+  .lm-student__card--confirm {
+    padding-left: 13px;
+  }
+}

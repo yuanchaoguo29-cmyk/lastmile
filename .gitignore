@@ -1,0 +1,6 @@
+node_modules/
+public/
+data/
+.env
+.check_*.js
+tmp_out.js

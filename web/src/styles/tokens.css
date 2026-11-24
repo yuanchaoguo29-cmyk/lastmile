@@ -1,0 +1,42 @@
+/* LastMile 设计令牌 —— 冻结，勿改。 */
+
+:root {
+  /* 辅导员端：深色监控台 */
+  --navy-900: #070d17;
+  --navy-800: #0b1220;
+  --navy-700: #111c2e;
+  --navy-600: #18263d;
+  --line: #22304a;
+  --mint: #3ddc97;
+  --mint-2: #25b77d;
+  --ink: #e8eef7;
+  --muted: #8fa3bf;
+  --amber: #f5b547;
+  --red: #ff6b6b;
+  --blue: #5b9dff;
+
+  /* 学生端：浅色大字 */
+  --s-bg: #ffffff;
+  --s-surface: #f4f7fa;
+  --s-line: #e2e8f0;
+  --s-ink: #0b1220;
+  --s-muted: #5a6b82;
+  --s-accent: #0e9f6e;
+  --s-warn: #d97706;
+  --s-danger: #dc2626;
+
+  /* 学生端三色语义：通知=中性 / 答题=蓝 / 动作确认=薄荷 */
+  --s-quiz: #1d4ed8;
+  --s-quiz-soft: #eff5ff;
+  --s-quiz-line: #c3d8fb;
+  --s-action-soft: #eefaf4;
+  --s-action-line: #b9ecd5;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC",
+    "Noto Sans SC", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+
+  --r-sm: 8px;
+  --r-md: 14px;
+  --r-lg: 20px;
+}
