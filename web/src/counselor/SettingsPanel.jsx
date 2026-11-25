@@ -294,6 +294,11 @@ export default function SettingsPanel({ open, onClose, onLock }) {
   const masked = ai.api_key_masked ? String(ai.api_key_masked) : ''
   const custom = Boolean(meta && meta.counselorKeyCustom)
   const keyPlaceholder = clearKey ? '保存后清空，先不填' : keySet ? masked || '••••••••' : '还没配置'
+  // 加密状态：让人能一眼确认「Key 是密文存的、主密钥来自哪里」
+  const sec = (meta && meta.security) || null
+  const secSource =
+    sec?.secret_source === 'env' ? '环境变量（推荐）' : sec?.secret_source === 'file' ? '本地文件 data/.secret' : '未配置'
+  const secBroken = Array.isArray(sec?.broken) && sec.broken.length > 0
 
   return (
     <div className="lm-counselor-set-overlay" role="presentation" onMouseDown={onOverlayDown}>
@@ -487,6 +492,13 @@ export default function SettingsPanel({ open, onClose, onLock }) {
                   ) : (
                     <p className="lm-counselor-set-hint">留空表示不改；要换 Key 直接填新的。</p>
                   )}
+                  {sec ? (
+                    <p className={`lm-counselor-set-hint${secBroken ? ' is-warn' : ''}`}>
+                      {secBroken
+                        ? '已加密的 Key 无法解密（SECRET_KEY 变了或数据目录被重置），请重新填写。'
+                        : `${sec.encryption} 加密存储 · 主密钥来自${secSource}`}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="lm-counselor-set-field">
