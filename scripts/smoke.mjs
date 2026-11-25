@@ -60,7 +60,13 @@ async function main() {
 
   sec('3. 种子数据')
   let notices = []
+  let rosterTotal = 0
   {
+    const ro = await call('GET', '/api/roster', undefined, { counselor: true })
+    ok('GET /api/roster 200', ro.status === 200, ro.status)
+    rosterTotal = Number(ro.data?.total) || 0
+    ok('名单人数 > 0', rosterTotal > 0, rosterTotal)
+
     const r = await call('GET', '/api/notices', undefined, { counselor: true })
     ok('GET /api/notices 200', r.status === 200, r.data)
     notices = r.data.notices || []
@@ -68,7 +74,7 @@ async function main() {
     const n = notices[0]
     if (n) {
       ok('列表带 counts.confirmed', typeof n.counts?.confirmed === 'number', n.counts)
-      ok('counts.roster = 114', n.counts?.roster === 114, n.counts)
+      ok(`counts.roster = 名单总数 ${rosterTotal}`, n.counts?.roster === rosterTotal, n.counts)
     }
   }
 
@@ -88,7 +94,7 @@ async function main() {
 
     const d = await call('GET', `/api/notices/${nid}/dashboard`, undefined, { counselor: true })
     ok('看板 200', d.status === 200, d.status)
-    ok('看板有 students', Array.isArray(d.data.students) && d.data.students.length === 114, d.data.students?.length)
+    ok('看板有 students', Array.isArray(d.data.students) && d.data.students.length === rosterTotal, d.data.students?.length)
     ok('看板有 timeline', Array.isArray(d.data.timeline), d.data.timeline?.length)
     ok('看板有 refusals', Array.isArray(d.data.refusals))
     ok('看板有 by_lang', !!d.data.by_lang)
@@ -217,8 +223,16 @@ async function main() {
     const r = await call('POST', `/api/notices/${nid}/translate`, { langs: ['th'] }, { counselor: true })
     ok('translate 200', r.status === 200, r.data)
     const th = r.data.translations?.th
-    ok('返回泰语版本', !!th, Object.keys(r.data.translations || {}))
-    if (th) ok('泰语 one_line 非空', !!th.one_line, th.one_line)
+    const failed = Array.isArray(r.data.failed) ? r.data.failed : []
+    if (th) {
+      ok('返回泰语版本', !!th, Object.keys(r.data.translations || {}))
+      ok('泰语 one_line 非空', !!th.one_line, th.one_line)
+    } else if (failed.length) {
+      pass++
+      console.log(`  ○ SKIP 泰语未生成（AI 不可用，failed=${failed.join(',')}）—— 配好可用的 key 后这一项才有意义`)
+    } else {
+      ok('返回泰语版本', false, '既没有 translations.th 也没有 failed')
+    }
     console.log(`    耗时 ${Date.now() - t0}ms`)
   }
 

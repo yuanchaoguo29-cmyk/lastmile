@@ -17,10 +17,12 @@ import {
   getSetting,
   setSetting,
   deleteSetting,
-  maskKey,
   testAi,
-  AI_DEFAULTS
+  AI_DEFAULTS,
+  keyStatus,
+  brokenKeyList
 } from './settings.js'
+import { safeEqual, secretSource, fingerprint } from './crypto.js'
 
 /* 兜底补载 .env：正式启动请用 `node --env-file-if-exists=.env server/index.js`。
    万一启动命令漏了 --env-file，这里补一次，保证 AI 与 COUNSELOR_KEY 不是空的。
@@ -73,9 +75,44 @@ const wrap = (fn) => (req, res, next) => {
 /** 辅导员口令（默认 123456，可在界面里改，改完写进 settings 表） */
 const counselorKey = () => process.env.COUNSELOR_KEY || '123456'
 
+/* 登录失败限速：同一 IP 5 分钟内错 10 次，锁 5 分钟。
+   目的是掐断「爆破辅导员密码 → 进后台替换/试探 API Key」这条路。 */
+const AUTH_WINDOW_MS = 5 * 60 * 1000
+const AUTH_MAX_FAILS = 10
+const authFails = new Map()
+
+function authBlockRemain(ip) {
+  const rec = authFails.get(ip)
+  if (!rec) return 0
+  const now = Date.now()
+  if (rec.until && now < rec.until) return Math.ceil((rec.until - now) / 1000)
+  if (now - rec.firstAt > AUTH_WINDOW_MS) {
+    authFails.delete(ip)
+    return 0
+  }
+  return 0
+}
+
+function authNoteFail(ip) {
+  const now = Date.now()
+  let rec = authFails.get(ip)
+  if (!rec || now - rec.firstAt > AUTH_WINDOW_MS) rec = { n: 0, firstAt: now, until: 0 }
+  rec.n += 1
+  if (rec.n >= AUTH_MAX_FAILS) rec.until = now + AUTH_WINDOW_MS
+  authFails.set(ip, rec)
+}
+
 /** /notices* 与 /roster 的鉴权：主密码（辅导员本人）或任一启用中的助理密码。
-    通过的请求挂 req.staff = { id, name, role }，用于留痕。 */
+    通过的请求挂 req.staff = { id, name, role }，用于留痕。
+    口令比较走常量时间；失败计入限速。 */
 function requireCounselor(req, res, next) {
+  const ip = String(req.ip || req.socket?.remoteAddress || '?')
+  const remain = authBlockRemain(ip)
+  if (remain > 0) {
+    res.setHeader('Retry-After', String(remain))
+    return fail(res, 429, 'TOO_MANY_ATTEMPTS', `密码错误次数太多，请 ${Math.ceil(remain / 60)} 分钟后再试`)
+  }
+
   const key = String(req.get('x-counselor-key') || '')
   const want = counselorKey()
   const pathOnly = String(req.originalUrl || '').split('?')[0]
@@ -83,7 +120,8 @@ function requireCounselor(req, res, next) {
   const queryAllowed = /\/export\.csv$/i.test(pathOnly)
   const presented = key || (queryAllowed ? queryKey : '')
 
-  if (presented && presented === want) {
+  if (presented && safeEqual(presented, want)) {
+    authFails.delete(ip)
     req.staff = { id: 'owner', name: '辅导员', role: 'owner' }
     return next()
   }
@@ -91,6 +129,7 @@ function requireCounselor(req, res, next) {
   if (presented) {
     const member = repo.getStaffByKey(presented)
     if (member) {
+      authFails.delete(ip)
       req.staff = { id: member.id, name: member.name, role: member.role || 'assistant' }
       try {
         repo.updateStaff(member.id, { last_seen_at: nowIso() })
@@ -99,6 +138,7 @@ function requireCounselor(req, res, next) {
     }
   }
 
+  authNoteFail(ip)
   return fail(res, 401, 'UNAUTHORIZED', '访问密码不对，请重新输入。')
 }
 
@@ -623,16 +663,34 @@ export function createApiRouter() {
   /* ---------------- 设置：访问密码 / AI 配置（改完立即生效，不用重启） ---------------- */
 
   const settingsView = () => {
-    const apiKey = process.env.DEEPSEEK_API_KEY || ''
+    const st = keyStatus()
     return {
       counselor_key_custom: Boolean(getSetting('counselor_key')),
       ai: {
-        api_key_set: Boolean(apiKey),
-        api_key_masked: maskKey(apiKey),
+        ...st,
         base_url: process.env.DEEPSEEK_BASE_URL || AI_DEFAULTS.base_url,
         model: process.env.DEEPSEEK_MODEL || AI_DEFAULTS.model
       },
+      security: {
+        encryption: 'AES-256-GCM',
+        secret_source: secretSource(), // env | file | none
+        broken: brokenKeyList()
+      },
       defaults: { base_url: AI_DEFAULTS.base_url, model: AI_DEFAULTS.model }
+    }
+  }
+
+  /** 敏感操作留痕：只记动作、操作人、指纹，不记明文 */
+  const audit = (req, action, extra = {}) => {
+    try {
+      repo.addEvent(null, null, 'settings', {
+        action,
+        staff_id: req.staff?.id || null,
+        staff_name: req.staff?.name || null,
+        ...extra
+      })
+    } catch (e) {
+      console.error('[audit] 记录失败：', e?.message || e)
     }
   }
 
@@ -648,8 +706,15 @@ export function createApiRouter() {
 
       if ('api_key' in body) {
         const v = str(body.api_key).trim()
-        if (!v) deleteSetting('deepseek_api_key')
-        else setSetting('deepseek_api_key', v)
+        if (!v) {
+          deleteSetting('deepseek_api_key')
+          audit(req, 'api_key_cleared')
+          console.log('[settings] API Key 已清空')
+        } else {
+          setSetting('deepseek_api_key', v) // 落库前自动 AES-256-GCM 加密
+          audit(req, 'api_key_updated', { fingerprint: fingerprint(v), length: v.length })
+          console.log(`[settings] API Key 已更新（指纹 ${fingerprint(v)}，密文存储）`)
+        }
       }
 
       if ('base_url' in body) {

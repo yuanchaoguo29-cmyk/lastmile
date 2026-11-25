@@ -20,6 +20,15 @@ app.disable('x-powered-by')
 app.set('trust proxy', true)
 app.use(express.json({ limit: '4mb' }))
 
+// 基础安全响应头（不引依赖；CSP 暂不加，避免误伤 Vite 产物）
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+  next()
+})
+
 // 轻量访问日志，方便演示时看谁在点
 app.use((req, res, next) => {
   if (req.path.startsWith('/api')) {

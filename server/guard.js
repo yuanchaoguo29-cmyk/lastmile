@@ -67,8 +67,9 @@ export const RISK_KEYWORDS = {
     'medis', 'kesehatan', 'rumah sakit', 'dokter', 'pemeriksaan', 'vaksin', 'klinik'
   ],
   mental: [
-    // zh
+    // zh —— 心情/压力这类口语说法必须收进来：模型挂掉时规则层是唯一防线
     '心理', '抑郁', '焦虑', '自杀', '情绪', '精神', '咨询师', '睡不着', '失眠',
+    '心情', '压力', '崩溃', '想不开', '轻生', '绝望', '难受得',
     // en
     'mental', 'depress', 'anxiety', 'anxious', 'suicid', 'therapy', 'therapist',
     'psycholog', 'panic', 'stress', 'counsel',
