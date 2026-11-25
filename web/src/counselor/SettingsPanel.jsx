@@ -90,7 +90,9 @@ export default function SettingsPanel({ open, onClose, onLock }) {
       d && typeof d.counselor_key_custom === 'boolean'
         ? d.counselor_key_custom
         : Boolean(p.counselorKeyCustom)
-    setMeta({ ai, defaults, counselorKeyCustom: custom })
+    // security 也要带上，否则「加密状态」那行永远不显示
+    const security = (d && d.security) || p.security || null
+    setMeta({ ai, defaults, counselorKeyCustom: custom, security })
     setBaseUrl(ai.base_url || '')
     setModel(ai.model || '')
     setApiKey('')
