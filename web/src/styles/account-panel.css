@@ -527,7 +527,30 @@
   color: var(--muted);
 }
 
-/* ---------- 9. 窄屏：操作换到单独一行 ---------- */
+/* ---------- 9. 「我的账号」弹窗里的改密块（账号相关，和本面板同一套视觉语言） ---------- */
+
+/* 加了改密块以后弹窗变高：矮屏（横屏手机）上让整个框滚动，别顶出可视区 */
+.lm-myaccount-box {
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.lm-myaccount-pw {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* Eyebrow 是裸 div，这里给它和下面那行说明之间留一点缝 */
+.lm-myaccount-pw > .lm-counselor-eyebrow {
+  margin-bottom: 6px;
+}
+
+.lm-myaccount-pw .lm-counselor-set-hint {
+  margin-top: 8px;
+}
+
+/* ---------- 10. 窄屏：操作换到单独一行 ---------- */
 
 @media (max-width: 560px) {
   .lm-account-row {

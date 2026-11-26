@@ -4,6 +4,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import {
+  changeCounselorKey,
   getCounselorKey,
   getCounselorUser,
   setCounselorKey,
@@ -148,6 +149,13 @@ export default function CounselorApp({ id }) {
   const [accountOpen, setAccountOpen] = useState(false)
   const [me, setMe] = useState(null)
 
+  /* 「我的账号」里改自己的登录密码（非 owner 才有这一块） */
+  const [pwCur, setPwCur] = useState('')
+  const [pwNext, setPwNext] = useState('')
+  const [pwConfirm, setPwConfirm] = useState('')
+  const [pwBusy, setPwBusy] = useState(false)
+  const [pwMsg, setPwMsg] = useState(null) /* { tone, text } | null */
+
   /* 解锁后问一次「我是谁」：owner 才能看到设置入口 */
   useEffect(() => {
     if (locked) return
@@ -252,6 +260,34 @@ export default function CounselorApp({ id }) {
     setLocked(true)
   }
 
+  /* 打开「我的账号」：每次进来都清掉上一次输的密码 */
+  function openMyAccount() {
+    setPwCur('')
+    setPwNext('')
+    setPwConfirm('')
+    setPwBusy(false)
+    setPwMsg(null)
+    setAccountOpen(true)
+  }
+
+  /* 改自己的登录密码：非 owner 由 api.js 分流到 PATCH /api/staff/me/password（body { current, next }） */
+  async function submitMyPassword() {
+    if (!pwReady) return
+    setPwBusy(true)
+    setPwMsg(null)
+    try {
+      await changeCounselorKey(pwCur, pwNext, false)
+      setPwMsg({ tone: 'ok', text: '已修改，下次登录用新密码' })
+      setPwCur('')
+      setPwNext('')
+      setPwConfirm('')
+    } catch (err) {
+      setPwMsg({ tone: 'err', text: String(err?.message || '修改失败，再试一次') })
+    } finally {
+      setPwBusy(false)
+    }
+  }
+
   /* 解析完 → 带着草稿进 #/c/draft，让辅导员先核字段 */
   function handleHandoff(payload) {
     setPending({ ...payload, sourceId: null, publishedId: null })
@@ -278,6 +314,12 @@ export default function CounselorApp({ id }) {
   }
 
   if (locked) return <LockScreen busy={busy} message={lockMsg} onSubmit={submit} />
+
+  /* 「我的账号」改密表单的即时校验 */
+  const pwTooShort = pwNext.length > 0 && pwNext.length < 6
+  const pwMismatch = pwConfirm.length > 0 && pwNext !== pwConfirm
+  const pwSame = pwNext.length > 0 && pwNext === pwCur
+  const pwReady = pwCur.length > 0 && pwNext.length >= 6 && pwNext === pwConfirm && !pwSame && !pwBusy
 
   const clock = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(
     now.getSeconds()
@@ -338,7 +380,7 @@ export default function CounselorApp({ id }) {
               type="button"
               className="lm-counselor-iconbtn"
               onClick={() => {
-                if (me && me.role !== 'owner') setAccountOpen(true)
+                if (me && me.role !== 'owner') openMyAccount()
                 else setSettingsOpen(true)
               }}
               title={me && me.role !== 'owner' ? '我的账号' : '设置'}
@@ -377,13 +419,104 @@ export default function CounselorApp({ id }) {
 
       {accountOpen ? (
         <div className="lm-counselor-modal" role="dialog" aria-modal="true" aria-label="我的账号">
-          <div className="lm-counselor-modal-box">
-            <Eyebrow>ACCOUNT · 助理账号</Eyebrow>
+          <div className="lm-counselor-modal-box lm-myaccount-box">
+            <Eyebrow>ACCOUNT · 我的账号</Eyebrow>
             <h3 className="lm-counselor-modal-title">{me?.username || me?.name || '助理'}</h3>
             <p className="lm-counselor-modal-hint">
-              当前账号：{me?.username || me?.name || '—'}。你以助理身份登录：能建通知、看板、催办、导出回执。总管密码和
-              API 配置只有主账号能改。
+              当前账号：{me?.username || me?.name || '—'}。你能建通知、看板、催办、导出回执；总管密码和 API
+              配置只有主账号能改。
             </p>
+
+            <div className="lm-myaccount-pw">
+              <Eyebrow>PASSWORD · 修改我的密码</Eyebrow>
+              <p className="lm-counselor-modal-hint">
+                初始密码 123456 只用来第一次登录，请改成只有你知道的。
+              </p>
+
+              <div className="lm-counselor-set-field">
+                <div className="lm-counselor-set-labelrow">
+                  <label className="lm-counselor-set-label" htmlFor="lm-my-pw-cur">
+                    当前密码
+                  </label>
+                </div>
+                <input
+                  id="lm-my-pw-cur"
+                  className="lm-counselor-set-input"
+                  type="password"
+                  value={pwCur}
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  disabled={pwBusy}
+                  onChange={(e) => setPwCur(e.target.value)}
+                />
+              </div>
+
+              <div className="lm-counselor-set-field">
+                <div className="lm-counselor-set-labelrow">
+                  <label className="lm-counselor-set-label" htmlFor="lm-my-pw-next">
+                    新密码
+                  </label>
+                  <span className="lm-counselor-set-mini">≥ 6 位</span>
+                </div>
+                <input
+                  id="lm-my-pw-next"
+                  className="lm-counselor-set-input"
+                  type="password"
+                  value={pwNext}
+                  autoComplete="new-password"
+                  placeholder="至少 6 位"
+                  disabled={pwBusy}
+                  onChange={(e) => setPwNext(e.target.value)}
+                />
+              </div>
+
+              <div className="lm-counselor-set-field">
+                <div className="lm-counselor-set-labelrow">
+                  <label className="lm-counselor-set-label" htmlFor="lm-my-pw-confirm">
+                    再输一次
+                  </label>
+                </div>
+                <input
+                  id="lm-my-pw-confirm"
+                  className="lm-counselor-set-input"
+                  type="password"
+                  value={pwConfirm}
+                  autoComplete="new-password"
+                  placeholder="再输一次新密码"
+                  disabled={pwBusy}
+                  onChange={(e) => setPwConfirm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && pwReady) submitMyPassword()
+                  }}
+                />
+              </div>
+
+              {pwSame ? (
+                <p className="lm-counselor-set-hint is-err">新密码不能和当前密码一样</p>
+              ) : pwMismatch ? (
+                <p className="lm-counselor-set-hint is-err">两次输入不一致</p>
+              ) : pwTooShort ? (
+                <p className="lm-counselor-set-hint is-err">至少 6 位</p>
+              ) : null}
+
+              {pwMsg && pwMsg.tone === 'err' ? (
+                <p className="lm-counselor-modal-err" role="alert">
+                  {pwMsg.text}
+                </p>
+              ) : null}
+              {pwMsg && pwMsg.tone === 'ok' ? (
+                <p className="lm-counselor-set-msg is-ok" role="status">
+                  {pwMsg.text}
+                </p>
+              ) : null}
+
+              <div className="lm-counselor-modal-actions">
+                <Btn variant="primary" onClick={submitMyPassword} disabled={!pwReady}>
+                  {pwBusy ? '正在修改…' : '修改我的密码'}
+                </Btn>
+              </div>
+            </div>
+
             <div className="lm-counselor-modal-actions">
               <Btn onClick={() => setAccountOpen(false)}>关闭</Btn>
               <Btn
