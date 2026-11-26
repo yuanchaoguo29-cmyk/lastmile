@@ -20,7 +20,7 @@ const RAW_1 = `关于2026级国际学生办理居留许可延期的通知
 
 根据成都市公安局出入境管理局要求，我校国际学生居留许可即将集中到期。现将统一办理延期事宜通知如下：
 
-一、办理对象：2026级全体国际学生（含本科生、硕士研究生），共114人。
+一、办理对象：2026级全体国际学生（含本科生、硕士研究生），共120人。
 二、办理时间：2026年11月25日（周三）17:00前，工作日上午9:00-11:30、下午14:00-17:00。
 三、办理地点：柳林校区通博楼A座204办公室（国际学生事务中心）。
 四、所需材料：
@@ -76,7 +76,7 @@ const STRUCTURED_1 = {
   title_zh: '关于2026级国际学生办理居留许可延期的通知',
   kind: 'residence_permit',
   one_line: '11月25日17:00前，本人带护照原件到通博楼A座204办公室办居留许可延期，不接受代办',
-  who: '2026级全体国际学生（含本科生、硕士研究生），共114人',
+  who: '2026级全体国际学生（含本科生、硕士研究生），共120人',
   what: '根据成都市公安局出入境管理局要求，学校统一组织2026级国际学生办理居留许可延期，须本人到现场提交材料。',
   actions: [
     {
@@ -345,7 +345,7 @@ const T1_EN = {
   one_line:
     'Before 25 Nov 2026, 17:00, bring your passport in person to Room 204, Tongbo Building A, to extend your residence permit.',
   what: 'At the request of the Chengdu Public Security Bureau Exit-Entry Administration, the residence permits of our international students are about to expire. The university will handle all extensions in one batch. You must appear in person.',
-  who: 'All 2026-cohort international students (114 in total, undergraduate and master’s).',
+  who: 'All 2026-cohort international students (120 in total, undergraduate and master’s).',
   actions: [
     {
       order: 1,
@@ -395,7 +395,7 @@ const T1_RU = {
   one_line:
     'До 25 ноября 2026 г., 17:00, лично принесите паспорт в каб. 204, корп. Тунбо A, чтобы продлить вид на жительство.',
   what: 'По требованию Управления по делам въезда и выезда УВД г. Чэнду срок действия вида на жительство иностранных студентов заканчивается. Университет оформляет продление централизованно. Явиться нужно лично.',
-  who: 'Все иностранные студенты набора 2026 года (114 человек, бакалавры и магистранты).',
+  who: 'Все иностранные студенты набора 2026 года (120 человек, бакалавры и магистранты).',
   actions: [
     {
       order: 1,
@@ -442,7 +442,7 @@ const T1_VI = {
   one_line:
     'Trước 17:00 ngày 25/11/2026, đích thân mang hộ chiếu đến phòng 204, tòa nhà Thông Bác A để gia hạn giấy phép cư trú.',
   what: 'Theo yêu cầu của Cục Quản lý xuất nhập cảnh Công an TP. Thành Đô, giấy phép cư trú của sinh viên quốc tế sắp hết hạn. Nhà trường tổ chức gia hạn tập trung, sinh viên phải trực tiếp đến nộp.',
-  who: 'Toàn bộ sinh viên quốc tế khóa 2026 (114 người, gồm đại học và thạc sĩ).',
+  who: 'Toàn bộ sinh viên quốc tế khóa 2026 (120 người, gồm đại học và thạc sĩ).',
   actions: [
     {
       order: 1,
@@ -496,8 +496,8 @@ const TRANSLATIONS_1 = { en: T1_EN, ru: T1_RU, vi: T1_VI }
    81-120 是 2026级（2026-A/B）；块内学历按 本科 → 硕士 → 博士 轮转。
    于是：52300001（本科 · 2023级）/ 22400041（硕士 · 2024级）/ 12600081（博士 · 2026级）。
    名单不含 email：邮箱由辅导员导入时自己填，正好演示「花名册体检」的缺失提示。
-   注：三份通知正文里的「共114人」照抄 docs/seed-notices.md 的冻结原文，名单扩到 120 人后
-   这个数字不再逐字对应；真实人数以 /api/roster 的 total 为准。
+   注：通知正文里的「共120人」与正文源 docs/seed-notices.md 一致，也和对外的 120 人名单对齐；
+   真实人数仍以 /api/roster 的 total 为准（辅导员导入替换名单后就不是 120 了）。
    ========================================================================= */
 
 const CLASSES_PER_GRADE = 2 // 每个年级 A / B 两个班

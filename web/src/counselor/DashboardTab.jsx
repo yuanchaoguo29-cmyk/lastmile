@@ -3,7 +3,7 @@
    DashboardTab 负责取数，BoardBody 只负责把数据画出来（空数据也不会白屏）。 */
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { exportCsvUrl, getDashboard } from '../lib/api.js'
+import { downloadReceiptsCsv, getDashboard, getMe } from '../lib/api.js'
 import {
   LANG_FULL,
   STATUS_META,
@@ -71,8 +71,28 @@ function Timeline({ series, roster }) {
   )
 }
 
-export function BoardBody({ data, id, onGoNudge }) {
+export function BoardBody({ data, id, onGoNudge, canExport }) {
   const [filter, setFilter] = useState('all')
+  const [exporting, setExporting] = useState(false)
+  const [exportErr, setExportErr] = useState('')
+
+  /* 导出走 fetch + Blob（密码在请求头里，不进 URL）；越权时服务端一律回 404，翻译成人话 */
+  async function onExport() {
+    if (exporting) return
+    setExporting(true)
+    setExportErr('')
+    try {
+      await downloadReceiptsCsv(id)
+    } catch (e) {
+      if (Number(e?.status) === 404 || e?.code === 'NOTICE_NOT_FOUND') {
+        setExportErr('这份通知不在你名下')
+      } else {
+        setExportErr(errText(e))
+      }
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const students = useMemo(
     () => (Array.isArray(data && data.students) ? data.students.filter((s) => s && s.student_id) : []),
@@ -216,11 +236,24 @@ export function BoardBody({ data, id, onGoNudge }) {
         label={`ROSTER · ${students.length} 人`}
         title="学生名单"
         actions={
-          <a className="lm-counselor-btn is-ghost is-sm" href={exportCsvUrl(id)} download>
-            导出回执 CSV
-          </a>
+          canExport ? (
+            <button
+              type="button"
+              className="lm-counselor-btn is-ghost is-sm"
+              onClick={onExport}
+              disabled={exporting}
+            >
+              {exporting ? '正在导出…' : '导出回执 CSV'}
+            </button>
+          ) : null
         }
       >
+        {exportErr ? (
+          <p className="lm-counselor-side-hint is-err" role="alert">
+            {exportErr}
+          </p>
+        ) : null}
+
         <div className="lm-counselor-filters">
           {FILTERS.map((f) => {
             const n = f.value === 'all' ? students.length : byStatus[f.value]
@@ -342,6 +375,22 @@ export default function DashboardTab({ id, published, token, onGoConfirm, onGoNu
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(!!published)
   const [err, setErr] = useState('')
+  /* 导出按钮只给 owner。身份问不出来（401/断网/老后端）就按无权处理——不渲染按钮，不给越权留口子 */
+  const [role, setRole] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    getMe()
+      .then((m) => {
+        if (alive) setRole(String((m && (m.role || (m.staff && m.staff.role))) || ''))
+      })
+      .catch(() => {
+        if (alive) setRole('')
+      })
+    return () => {
+      alive = false
+    }
+  }, [token])
 
   useEffect(() => {
     if (!published) {
@@ -408,7 +457,7 @@ export default function DashboardTab({ id, published, token, onGoConfirm, onGoNu
           <ErrBar message={err} />
         </div>
       ) : null}
-      <BoardBody data={data} id={id} onGoNudge={onGoNudge} />
+      <BoardBody data={data} id={id} canExport={role === 'owner'} onGoNudge={onGoNudge} />
     </>
   )
 }

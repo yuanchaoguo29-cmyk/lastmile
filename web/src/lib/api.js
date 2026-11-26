@@ -144,11 +144,51 @@ export const getDashboard = (id) => req(`/api/notices/${id}/dashboard`, { counse
 export const buildNudge = (id, payload) =>
   req(`/api/notices/${id}/nudge`, { method: 'POST', body: payload, counselor: true })
 
-export const exportCsvUrl = (id) => {
-  /* 导出走 <a href> 下载，发不了请求头，所以账号也放进 query */
-  const q = new URLSearchParams({ k: getCounselorKey() })
-  if (getCounselorUser()) q.set('u', getCounselorUser())
-  return `/api/notices/${id}/export.csv?${q.toString()}`
+/** 导出回执 CSV：和别的辅导员接口一样用请求头带账号 + 密码（x-counselor-user / x-counselor-key），
+    密码不再进 URL。拿到文本后在本机拼 Blob + objectURL 触发下载，文件名「回执-<通知id>.csv」。
+    失败沿用 req() 的形态：抛出的 err 带 status / code，页面可以把 404 翻成「这份通知不在你名下」。 */
+export async function downloadReceiptsCsv(noticeId) {
+  const headers = { 'x-counselor-key': getCounselorKey() }
+  const user = userHeader(getCounselorUser())
+  if (user) headers['x-counselor-user'] = user
+
+  let res
+  try {
+    res = await fetch(`/api/notices/${encodeURIComponent(noticeId)}/export.csv`, { headers })
+  } catch {
+    throw new Error('连不上服务器，检查后端是否在 3000 端口运行')
+  }
+
+  const text = await res.text()
+  if (!res.ok) {
+    let data = {}
+    if (text) {
+      try {
+        data = JSON.parse(text)
+      } catch {
+        /* 非 JSON 的错误页：下面按 HTTP 状态兜底 */
+      }
+    }
+    const err = new Error(data?.error?.message || `HTTP ${res.status}`)
+    err.status = res.status
+    err.code = data?.error?.code || ''
+    throw err
+  }
+
+  const filename = `回执-${noticeId}.csv`
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  /* 等浏览器把 blob 读完再回收：立刻 revoke 在部分浏览器会把下载截断 */
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+  return { filename, bytes: blob.size }
 }
 
 export const getRoster = (query) => {

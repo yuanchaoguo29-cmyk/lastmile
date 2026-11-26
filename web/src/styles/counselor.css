@@ -1442,6 +1442,11 @@
   text-align: center;
 }
 
+/* 导出回执失败的提示（如「这份通知不在你名下」） */
+.lm-counselor-side-hint.is-err {
+  color: var(--red);
+}
+
 .lm-counselor-side-hint code {
   font-family: var(--font-mono);
   font-size: 11.5px;
