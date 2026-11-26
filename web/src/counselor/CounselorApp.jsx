@@ -8,6 +8,7 @@ import NoticeList from './NoticeList.jsx'
 import NoticeDetail from './NoticeDetail.jsx'
 import SettingsPanel from './SettingsPanel.jsx'
 import RosterPanel from './RosterPanel.jsx'
+import AccountPanel from './AccountPanel.jsx'
 import { Btn, Eyebrow } from './ui.jsx'
 
 function isAuthError(e) {
@@ -111,6 +112,7 @@ export default function CounselorApp({ id }) {
   const [pending, setPending] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [rosterOpen, setRosterOpen] = useState(false)
+  const [accountOpen2, setAccountOpen2] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
   const [me, setMe] = useState(null)
 
@@ -255,6 +257,18 @@ export default function CounselorApp({ id }) {
             <button
               type="button"
               className="lm-counselor-iconbtn"
+              onClick={() => setAccountOpen2(true)}
+              title="账号管理"
+              aria-label="账号管理"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="8" r="3.4" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M4.8 20c.6-3.4 3.4-5.2 7.2-5.2s6.6 1.8 7.2 5.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="lm-counselor-iconbtn"
               onClick={() => setRosterOpen(true)}
               title="花名册"
               aria-label="花名册"
@@ -299,6 +313,8 @@ export default function CounselorApp({ id }) {
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onLock={lockConsole} />
 
       <RosterPanel open={rosterOpen} onClose={() => setRosterOpen(false)} />
+
+      <AccountPanel open={accountOpen2} onClose={() => setAccountOpen2(false)} />
 
       {accountOpen ? (
         <div className="lm-counselor-modal" role="dialog" aria-modal="true" aria-label="我的账号">

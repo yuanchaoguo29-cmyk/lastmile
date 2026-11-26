@@ -1,14 +1,19 @@
-/* 设置面板：访问密码 + DeepSeek API 配置 + 助理账号，仅本机生效。
+/* 设置面板：访问密码 + DeepSeek API 配置 + 发件邮箱 + 账号管理（按角色），仅本机生效。
    覆盖式模态；数据全部走 lib/api.js，页面不自己 fetch。
-   所有错误只在面板里显示成红字：不 alert、不白屏、不掉线（confirm 除外）。 */
+   所有错误只在面板里显示成红字：不 alert、不白屏、不掉线（confirm 除外）。
+   账号段按 /api/me 的 role 分三种：owner 管辅导员、counselor 管自己的助理、assistant 整段不显示。 */
 
 import React, { useEffect, useRef, useState } from 'react'
 import {
   changeCounselorKey,
+  clearMyEmail,
   createStaff,
   deleteStaff,
+  getMe,
+  getMyEmail,
   getSettings,
   listStaff,
+  setMyEmail,
   testAiConnection,
   updateSettings,
   updateStaff
@@ -64,11 +69,17 @@ export default function SettingsPanel({ open, onClose, onLock }) {
   const [aiBusy, setAiBusy] = useState('') /* '' | 'test' | 'save' */
   const [aiMsg, setAiMsg] = useState(EMPTY_MSG)
 
+  /* 当前账号：role 决定「账号」段是管辅导员还是管助理 */
+  const [me, setMe] = useState(null)
+  const [meLoading, setMeLoading] = useState(false)
+  const [meErr, setMeErr] = useState('')
+
   const panelRef = useRef(null)
   const closeRef = useRef(null)
   const lockTimer = useRef(null)
   /* 每次读取递增：旧请求晚回来时不覆盖新结果（快速开关面板时会遇到） */
   const reqSeq = useRef(0)
+  const meSeq = useRef(0)
 
   useEffect(() => () => clearTimeout(lockTimer.current), [])
 
@@ -117,6 +128,24 @@ export default function SettingsPanel({ open, onClose, onLock }) {
     }
   }
 
+  /* 问一次「我是谁」：拿到 role 才能决定账号段的标题和权限范围 */
+  async function fetchMe() {
+    const seq = ++meSeq.current
+    setMeLoading(true)
+    setMeErr('')
+    try {
+      const d = await getMe()
+      if (seq !== meSeq.current) return
+      setMe(d && typeof d === 'object' ? d : null)
+    } catch (e) {
+      if (seq !== meSeq.current) return
+      if (isSessionAuthError(e)) lockSoon()
+      else setMeErr(errText(e))
+    } finally {
+      if (seq === meSeq.current) setMeLoading(false)
+    }
+  }
+
   /* 每次打开都重置成本地干净状态，再拉一次最新配置 */
   useEffect(() => {
     if (!open) return undefined
@@ -136,13 +165,18 @@ export default function SettingsPanel({ open, onClose, onLock }) {
     setModel('')
     setAiBusy('')
     setAiMsg(EMPTY_MSG)
+    setMe(null)
+    setMeLoading(true)
+    setMeErr('')
     clearTimeout(lockTimer.current)
 
     fetchSettings()
+    fetchMe()
 
     return () => {
       /* 关掉/卸载时把这次读取作废，回来的结果不再落到面板上 */
       reqSeq.current += 1
+      meSeq.current += 1
       clearTimeout(lockTimer.current)
     }
   }, [open])
@@ -571,8 +605,31 @@ export default function SettingsPanel({ open, onClose, onLock }) {
                 <p className="lm-counselor-set-hint">测试用的是已保存的配置：改完先保存，再测。</p>
               </section>
 
-              {/* ---------- 3. 助理账号 ---------- */}
-              <StaffSection open={open} onAuthError={lockSoon} />
+              {/* ---------- 3. 发件邮箱（所有角色都能绑自己的） ---------- */}
+              <SenderSection open={open} onAuthError={lockSoon} />
+
+              {/* ---------- 4. 账号管理：owner 管辅导员 / counselor 管助理 / assistant 整段隐藏 ---------- */}
+              {meErr ? (
+                <section className="lm-counselor-set-sec lm-staff-norole">
+                  <Eyebrow>ACCOUNTS · 账号管理</Eyebrow>
+                  <p className="lm-counselor-set-desc">没读到当前账号的角色，账号管理先不可用。</p>
+                  <p className="lm-counselor-set-msg is-err" role="alert">
+                    {meErr}
+                  </p>
+                  <div className="lm-counselor-set-actions">
+                    <Btn onClick={fetchMe} disabled={meLoading} className="lm-counselor-set-btn">
+                      {meLoading ? '重试中…' : '重试'}
+                    </Btn>
+                  </div>
+                </section>
+              ) : !me ? (
+                <section className="lm-counselor-set-sec lm-staff-norole">
+                  <Eyebrow>ACCOUNTS · 账号管理</Eyebrow>
+                  <Skel rows={3} />
+                </section>
+              ) : me.role === 'owner' || me.role === 'counselor' ? (
+                <StaffSection open={open} role={me.role} onAuthError={lockSoon} />
+              ) : null /* assistant 或角色不明：没有管账号的权限，整段不显示 */}
             </>
           ) : null}
         </div>
@@ -590,12 +647,355 @@ export default function SettingsPanel({ open, onClose, onLock }) {
   )
 }
 
-/* ---------- 助理账号段（settings 面板里的第三段） ----------
-   一个助理一把密码：发通知、催办按这把密码记在各自名下。
+/* ---------- 发件邮箱段（settings 面板里的第三段） ----------
+   每个账号绑自己的发件邮箱：通知详情页的一键发信就用它。
+   Key 只存服务端（加密），这一侧只看到掩码；留空表示不改。 */
+
+const SENDER_PROVIDERS = [
+  { id: 'resend', label: 'resend', note: 'HTTP API，真发信' },
+  { id: 'log', label: 'log', note: '本地联调，不会真发信' }
+]
+
+/* 服务端一般回掩码（a***@x.com）；万一回明文，本地也先掩一道再显示 */
+function maskEmail(v) {
+  const s = String(v || '').trim()
+  if (!s) return ''
+  if (s.includes('*')) return s
+  const at = s.lastIndexOf('@')
+  if (at <= 0) return s
+  return `${s.slice(0, 1)}***${s.slice(at)}`
+}
+
+/* 只做「看着不对」的提示；真校验留给服务端，别在前端拦掉合法地址 */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function SenderSection({ open, onAuthError }) {
+  /* 当前绑定：{ bound, address, provider, from } */
+  const [cur, setCur] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [loadErr, setLoadErr] = useState('')
+
+  const [email, setEmail] = useState('')
+  const [provider, setProvider] = useState('resend')
+  const [apiKey, setApiKey] = useState('')
+  const [busy, setBusy] = useState('') /* '' | 'save' | 'clear' */
+  const [msg, setMsg] = useState(EMPTY_MSG)
+
+  /* 每次读取递增：关掉面板后晚回来的结果不落到表单上 */
+  const seqRef = useRef(0)
+
+  /* 服务端回来的绑定状态统一在这儿落地：表单跟着新状态重置 */
+  function applyEmail(d) {
+    const e = d && typeof d === 'object' ? d : {}
+    const next = {
+      bound: Boolean(e.bound),
+      address: String(e.address || e.address_masked || ''),
+      provider: e.provider ? String(e.provider) : '',
+      from: e.from ? String(e.from) : ''
+    }
+    setCur(next)
+    setEmail('')
+    setApiKey('')
+    setProvider(next.provider === 'log' ? 'log' : 'resend')
+    return next
+  }
+
+  async function fetchEmail() {
+    const seq = ++seqRef.current
+    setLoading(true)
+    setLoadErr('')
+    setMsg(EMPTY_MSG)
+    try {
+      const d = await getMyEmail()
+      if (seq !== seqRef.current) return
+      applyEmail(d)
+    } catch (e) {
+      if (seq !== seqRef.current) return
+      if (isSessionAuthError(e)) onAuthError()
+      else setLoadErr(errText(e))
+    } finally {
+      if (seq === seqRef.current) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return undefined
+    setCur(null)
+    setEmail('')
+    setApiKey('')
+    setProvider('resend')
+    setBusy('')
+    setMsg(EMPTY_MSG)
+    fetchEmail()
+    return () => {
+      seqRef.current += 1
+    }
+  }, [open])
+
+  const bound = Boolean(cur && cur.bound)
+  const curProvider = bound ? cur.provider || '' : ''
+  const addr = email.trim()
+  const emailOk = EMAIL_RE.test(addr)
+  const emailBad = Boolean(addr) && !emailOk
+  /* 换地址 / 换通道都要重填一次：服务端只存掩码，读不回明文 */
+  const keyNeeded = provider === 'resend' && !(bound && curProvider === 'resend')
+  const keyMissing = keyNeeded && !apiKey.trim()
+  const formBusy = Boolean(busy)
+  const canSave = emailOk && !keyMissing && !formBusy
+
+  async function save() {
+    if (!canSave) return
+    setBusy('save')
+    setMsg(EMPTY_MSG)
+    try {
+      const body = { email: addr, provider }
+      if (provider === 'resend' && apiKey.trim()) body.api_key = apiKey.trim()
+      if (cur && cur.from) body.from = cur.from
+      const r = await setMyEmail(body)
+      if (r && r.ok === false) {
+        setMsg({ tone: 'err', text: r.error || '保存失败，再试一次' })
+        return
+      }
+      const srv = r && r.email && typeof r.email === 'object' ? r.email : {}
+      applyEmail({
+        bound: srv.bound === undefined ? true : srv.bound,
+        address: srv.address || srv.address_masked || maskEmail(addr),
+        provider: srv.provider || provider,
+        from: srv.from || (cur && cur.from) || ''
+      })
+      setMsg({
+        tone: 'ok',
+        text:
+          provider === 'log'
+            ? '已保存（log 通道：只写日志，不会真发信）'
+            : '已保存，通知详情页可以一键发到学生邮箱'
+      })
+    } catch (e) {
+      if (isSessionAuthError(e)) {
+        onAuthError()
+        return
+      }
+      setMsg({ tone: 'err', text: errText(e) })
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function clear() {
+    if (formBusy || !bound) return
+    if (!window.confirm('清除发件邮箱？之后一键发信会先要求重新绑定。')) return
+    setBusy('clear')
+    setMsg(EMPTY_MSG)
+    try {
+      const r = await clearMyEmail()
+      if (r && r.ok === false) {
+        setMsg({ tone: 'err', text: r.error || '清除失败，再试一次' })
+        return
+      }
+      applyEmail({ bound: false })
+      setMsg({ tone: 'ok', text: '已清除发件邮箱' })
+    } catch (e) {
+      if (isSessionAuthError(e)) {
+        onAuthError()
+        return
+      }
+      setMsg({ tone: 'err', text: errText(e) })
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const shown = bound
+    ? `${maskEmail(cur.address) || '已绑定'}${curProvider ? ` · ${curProvider}` : ''}`
+    : '未绑定'
+
+  return (
+    <section className="lm-counselor-set-sec lm-sender" aria-label="发件邮箱">
+      <div className="lm-counselor-set-sec-head">
+        <Eyebrow>SENDER · 发件邮箱</Eyebrow>
+        <span className={`lm-counselor-set-badge${bound ? ' is-on' : ''}`}>
+          {bound ? '已绑定' : '未绑定'}
+        </span>
+      </div>
+      <p className="lm-counselor-set-desc">
+        同一份通知可以一键发到学生邮箱；Railway 封禁出站 SMTP，所以走 HTTP API（Resend 免费额度够用）
+      </p>
+
+      <div className="lm-sender-cur">
+        <span className={`lm-sender-dot${bound ? ' is-on' : ''}`} aria-hidden="true" />
+        <code className={`lm-sender-addr${bound ? '' : ' is-dim'}`}>{shown}</code>
+      </div>
+
+      {loadErr ? (
+        <div className="lm-sender-loaderr">
+          <p className="lm-counselor-set-msg is-err" role="alert">
+            {loadErr}
+          </p>
+          <Btn size="sm" onClick={fetchEmail} disabled={loading}>
+            {loading ? '重试中…' : '重试'}
+          </Btn>
+        </div>
+      ) : null}
+
+      {!loadErr && !cur && loading ? <Skel rows={3} /> : null}
+
+      {cur ? (
+        <>
+          <div className="lm-counselor-set-field">
+            <div className="lm-counselor-set-labelrow">
+              <label className="lm-counselor-set-label" htmlFor="lm-set-sender-email">
+                发件邮箱
+              </label>
+              {bound ? <span className="lm-counselor-set-mini">要改就重填一次</span> : null}
+            </div>
+            <input
+              id="lm-set-sender-email"
+              className="lm-counselor-set-input is-mono"
+              type="email"
+              value={email}
+              autoComplete="off"
+              spellCheck="false"
+              placeholder={bound ? '换地址或换通道时填一次' : 'you@example.com'}
+              disabled={formBusy}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            {emailBad ? <p className="lm-counselor-set-hint is-err">邮箱格式看着不对</p> : null}
+          </div>
+
+          <div className="lm-counselor-set-field">
+            <div className="lm-counselor-set-labelrow">
+              <span className="lm-counselor-set-label">通道</span>
+            </div>
+            <div className="lm-sender-opts" role="radiogroup" aria-label="发信通道">
+              {SENDER_PROVIDERS.map((p) => {
+                const on = provider === p.id
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    className={`lm-sender-opt${on ? ' is-on' : ''}`}
+                    disabled={formBusy}
+                    onClick={() => setProvider(p.id)}
+                  >
+                    <span className="lm-sender-opt-k">{p.label}</span>
+                    <span className="lm-sender-opt-n">{p.note}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="lm-counselor-set-field">
+            <div className="lm-counselor-set-labelrow">
+              <label className="lm-counselor-set-label" htmlFor="lm-set-sender-key">
+                API Key
+              </label>
+              {bound && curProvider === 'resend' ? (
+                <span className="lm-counselor-set-mini">已保存，留空=不改</span>
+              ) : null}
+            </div>
+            <input
+              id="lm-set-sender-key"
+              className="lm-counselor-set-input is-mono"
+              type="password"
+              value={apiKey}
+              autoComplete="off"
+              spellCheck="false"
+              placeholder={
+                provider === 'log' ? 'log 通道不用填' : bound && curProvider === 'resend' ? '留空不改' : 're_…'
+              }
+              disabled={provider === 'log' || formBusy}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+            <p className="lm-counselor-set-hint">Key 只存服务端（加密），这里看不到明文；留空表示不改。</p>
+            {keyMissing ? (
+              <p className="lm-counselor-set-hint is-warn">走 Resend 要先填 API Key</p>
+            ) : null}
+          </div>
+
+          {msg.text ? (
+            <p
+              className={`lm-counselor-set-msg is-${msg.tone}`}
+              role={msg.tone === 'err' ? 'alert' : 'status'}
+            >
+              {msg.text}
+            </p>
+          ) : null}
+
+          <div className="lm-counselor-set-actions">
+            <Btn
+              variant="primary"
+              onClick={save}
+              disabled={!canSave}
+              className="lm-counselor-set-btn"
+            >
+              {busy === 'save' ? '保存中…' : '保存'}
+            </Btn>
+            <Btn
+              onClick={clear}
+              disabled={formBusy || !bound}
+              className="lm-counselor-set-btn lm-sender-clear"
+            >
+              {busy === 'clear' ? '清除中…' : '清除'}
+            </Btn>
+          </div>
+
+          <p className="lm-counselor-set-hint">
+            {bound
+              ? `已绑定 ${maskEmail(cur.address) || '这个账号'}；换地址或换通道要把发件邮箱重填一次。`
+              : '填好发件邮箱和通道后保存，就能在通知详情页一键发信。'}
+          </p>
+        </>
+      ) : null}
+    </section>
+  )
+}
+
+/* ---------- 账号段（settings 面板里的第四段，按角色变形） ----------
+   owner 管辅导员、counselor 管自己的助理、assistant 整段不显示（由父组件拦）。
+   一个账号一把密码：发通知、催办按这把密码记在各自名下。
    明文密码只在新建 / 重置时由服务端返回一次，之后列表里只有掩码，
    所以拿到就立刻摆进琥珀色框里让人复制，点「我已记下」才收起。 */
 
 const STAFF_EMPTY = '还没有助理。助理能发通知、催办、导出回执，但改不了设置。'
+const COUNSELOR_EMPTY = '还没有辅导员。辅导员能自己导入学生、发通知，只能看到自己名下的。'
+
+const ACCOUNT_CFG = {
+  owner: {
+    eyebrow: 'COUNSELORS · 辅导员账号',
+    desc: '辅导员用自己的密码登录同一套工作台，学生、通知、回执都只在自己名下。总管能建、停用、重置和删除他们。',
+    empty: COUNSELOR_EMPTY,
+    addLabel: '添加辅导员',
+    adding: '添加中…',
+    nameLabel: '辅导员姓名',
+    inputId: 'lm-set-counselor-name',
+    placeholder: '例如：李辅导员',
+    countSuffix: '位辅导员',
+    nameTip: '辅导员',
+    subKey: '助理',
+    delAsk: (n) => `删除辅导员「${n}」？删掉后这把密码立刻失效，他名下的学生和通知记录会留在系统里。`,
+    hint: '添加后会显示一次密码，复制发给本人；之后这里只看得到掩码。',
+    aria: '辅导员账号'
+  },
+  counselor: {
+    eyebrow: 'STAFF · 助理账号',
+    desc: '助理用自己的密码登录同一套工作台，发通知和催办会记在各自名下。他们看不到这一页的设置。',
+    empty: STAFF_EMPTY,
+    addLabel: '添加助理',
+    adding: '添加中…',
+    nameLabel: '姓名',
+    inputId: 'lm-set-staff-name',
+    placeholder: '例如：王助理',
+    countSuffix: '人',
+    nameTip: '助理',
+    subKey: '',
+    delAsk: (n) => `删除助理「${n}」？删掉后这把密码立刻失效，他发过的通知记录会留在系统里。`,
+    hint: '添加后会显示一次密码，复制发给本人；之后这里只看得到掩码。',
+    aria: '助理账号'
+  }
+}
 
 /* 服务端一般会给 key_masked；万一没给，本地按同一套规则兜一个，别把明文塞进列表 */
 function maskKey(key) {
@@ -610,7 +1010,21 @@ function isActive(v) {
   return v === true || Number(v) === 1
 }
 
-function StaffSection({ open, onAuthError }) {
+/* 列表/新建/重置的返回体：v2 用 members / member，老后端用 staff，两边都认 */
+function rowsOf(d) {
+  if (Array.isArray(d && d.members)) return d.members
+  if (Array.isArray(d && d.staff)) return d.staff
+  return []
+}
+
+function memberOf(r) {
+  if (r && r.member && typeof r.member === 'object') return r.member
+  if (r && r.staff && typeof r.staff === 'object') return r.staff
+  return null
+}
+
+function StaffSection({ open, role, onAuthError }) {
+  const cfg = role === 'owner' ? ACCOUNT_CFG.owner : ACCOUNT_CFG.counselor
   const [rows, setRows] = useState([])
   const [loaded, setLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -639,7 +1053,7 @@ function StaffSection({ open, onAuthError }) {
     try {
       const d = await listStaff()
       if (seq !== seqRef.current) return
-      setRows(Array.isArray(d && d.staff) ? d.staff : [])
+      setRows(rowsOf(d))
       setLoaded(true)
     } catch (e) {
       if (seq !== seqRef.current) return
@@ -650,14 +1064,19 @@ function StaffSection({ open, onAuthError }) {
     }
   }
 
-  /* 每次 open 变 true 都重新拉一次：助理可能在别的窗口里被加过、停用过 */
+  /* 每次 open 变 true 都重新拉一次：名下成员可能在别的窗口里被加过、停用过。
+     role 也进依赖：换账号（owner ↔ counselor）后列表要跟着换一份。 */
   useEffect(() => {
     if (!open) return undefined
+    setRows([])
+    setLoaded(false)
+    setSecret(null)
+    setOpErr('')
     fetchStaff()
     return () => {
       seqRef.current += 1
     }
-  }, [open])
+  }, [open, role])
 
   /* 新密码出现时把它滚进视野（滚动容器是面板的 body） */
   useEffect(() => {
@@ -695,11 +1114,11 @@ function StaffSection({ open, onAuthError }) {
     setOpErr('')
     try {
       const r = await createStaff(nm)
-      const st = (r && r.staff) || null
+      const st = memberOf(r)
       const key = String((r && r.access_key) || '')
       if (!st || !st.id || !key) {
         /* 建好了却没回密码：先刷新让人看到这一行，别让用户重复添加 */
-        setOpErr('服务端没返回密码，助理可能已经建好：列表已刷新，请对他点一次「重置密码」')
+        setOpErr(`服务端没返回密码，${cfg.nameTip}可能已经建好：列表已刷新，请对他点一次「重置密码」`)
         await fetchStaff()
         return
       }
@@ -731,7 +1150,7 @@ function StaffSection({ open, onAuthError }) {
         setOpErr(r.error || '操作失败，再试一次')
         return
       }
-      const st = (r && r.staff) || null
+      const st = memberOf(r)
       mergeRow(row.id, {
         ...(st || {}),
         active: st && st.active !== undefined ? st.active : active ? 0 : 1
@@ -758,7 +1177,7 @@ function StaffSection({ open, onAuthError }) {
         setOpErr(r.error || '重置失败，再试一次')
         return
       }
-      const st = (r && r.staff) || null
+      const st = memberOf(r)
       const key = String((r && r.access_key) || '')
       mergeRow(row.id, rowFrom(st, key, row.name))
       if (key) {
@@ -780,9 +1199,7 @@ function StaffSection({ open, onAuthError }) {
 
   async function removeRow(row) {
     if (blocked) return
-    if (!window.confirm(`删除助理「${row.name}」？删掉后这把密码立刻失效，他发过的通知记录会留在系统里。`)) {
-      return
-    }
+    if (!window.confirm(cfg.delAsk(row.name))) return
     setBusy({ id: row.id, kind: 'del' })
     setOpErr('')
     try {
@@ -805,14 +1222,16 @@ function StaffSection({ open, onAuthError }) {
   }
 
   return (
-    <section className="lm-staff" aria-label="助理账号">
+    <section className="lm-staff" aria-label={cfg.aria}>
       <div className="lm-staff-head">
-        <Eyebrow>STAFF · 助理账号</Eyebrow>
-        {loaded ? <span className="lm-staff-count">{rows.length} 人</span> : null}
+        <Eyebrow>{cfg.eyebrow}</Eyebrow>
+        {loaded ? (
+          <span className="lm-staff-count">
+            {rows.length} {cfg.countSuffix}
+          </span>
+        ) : null}
       </div>
-      <p className="lm-staff-desc">
-        助理用自己的密码登录同一套工作台，发通知和催办会记在各自名下。他们看不到这一页的设置。
-      </p>
+      <p className="lm-staff-desc">{cfg.desc}</p>
 
       {loadErr ? (
         <div className="lm-staff-loaderr">
@@ -827,7 +1246,7 @@ function StaffSection({ open, onAuthError }) {
 
       {!loadErr && !loaded ? <Skel rows={3} /> : null}
 
-      {!loadErr && loaded && !rows.length ? <p className="lm-staff-empty">{STAFF_EMPTY}</p> : null}
+      {!loadErr && loaded && !rows.length ? <p className="lm-staff-empty">{cfg.empty}</p> : null}
 
       {rows.length ? (
         <>
@@ -841,6 +1260,8 @@ function StaffSection({ open, onAuthError }) {
               const kind = busy && busy.id === row.id ? busy.kind : ''
               const seen = row.last_seen_at ? fmtRel(row.last_seen_at) : ''
               const seenText = seen && seen !== '—' ? seen : '还没登录'
+              /* owner 看到的是辅导员，多带一个「助理 N 人」 */
+              const subCount = cfg.subKey ? Number(row.assistant_count) || 0 : null
               return (
                 <div
                   className={`lm-staff-row${active ? '' : ' is-off'}`}
@@ -855,6 +1276,11 @@ function StaffSection({ open, onAuthError }) {
                       <span className="lm-staff-dot" aria-hidden="true" />
                       {active ? '启用' : '已停用'}
                     </span>
+                    {subCount !== null ? (
+                      <span className="lm-staff-sub">
+                        {cfg.subKey} {subCount} 人
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className="lm-staff-acts">
@@ -895,7 +1321,7 @@ function StaffSection({ open, onAuthError }) {
                     <span className="lm-staff-meta-k">最近登录</span>
                     <span
                       className={`lm-staff-meta-v${row.last_seen_at ? '' : ' is-dim'}`}
-                      title={row.last_seen_at ? fmtDateTime(row.last_seen_at) : '这个助理还没登录过'}
+                      title={row.last_seen_at ? fmtDateTime(row.last_seen_at) : `这个${cfg.nameTip}还没登录过`}
                     >
                       {seenText}
                     </span>
@@ -934,18 +1360,18 @@ function StaffSection({ open, onAuthError }) {
 
       <div className="lm-staff-add">
         <div className="lm-staff-field">
-          <label className="lm-staff-label" htmlFor="lm-set-staff-name">
-            姓名
+          <label className="lm-staff-label" htmlFor={cfg.inputId}>
+            {cfg.nameLabel}
           </label>
           <input
-            id="lm-set-staff-name"
+            id={cfg.inputId}
             className="lm-staff-input"
             type="text"
             value={name}
             autoComplete="off"
             spellCheck="false"
             maxLength={24}
-            placeholder="例如：王助理"
+            placeholder={cfg.placeholder}
             disabled={creating}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
@@ -954,10 +1380,10 @@ function StaffSection({ open, onAuthError }) {
           />
         </div>
         <Btn variant="primary" className="lm-staff-addbtn" onClick={submitCreate} disabled={!canCreate}>
-          {creating ? '添加中…' : '添加助理'}
+          {creating ? cfg.adding : cfg.addLabel}
         </Btn>
       </div>
-      <p className="lm-staff-hint">添加后会显示一次密码，复制发给本人；之后这里只看得到掩码。</p>
+      <p className="lm-staff-hint">{cfg.hint}</p>
     </section>
   )
 }

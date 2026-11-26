@@ -1,0 +1,546 @@
+/* 账号管理面板（AccountPanel.jsx）样式 —— 顶栏独立入口用的覆盖式面板。
+   外壳（遮罩 / 面板 / 头部 / body / 底部）复用 counselor.css 里的 .lm-counselor-set-*，
+   这里只写面板内部：三个数字、成员表、一次性密码、添加表单。
+   颜色只用 tokens.css 的变量（mint / amber / red / ink / muted / navy / line）。 */
+
+/* ---------- 1. 面板外壳的微调 ---------- */
+
+.lm-account-panel {
+  max-width: 560px;
+}
+
+.lm-account-body {
+  padding-bottom: 18px;
+}
+
+.lm-account-panel :focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+
+/* 底部只有一个「关闭」，靠右对齐，别跟设置面板的双按钮错开视觉 */
+.lm-account-panel .lm-counselor-set-foot {
+  justify-content: flex-end;
+}
+
+/* ---------- 2. 顶部三个数字 ---------- */
+
+.lm-account-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.lm-account-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--navy-800);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.lm-account-stat-k {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.lm-account-stat-v {
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lm-account-stat-s {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+/* ---------- 3. 成员段 ---------- */
+
+.lm-account-sec {
+  padding: 16px 16px 18px;
+  background: var(--navy-800);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  min-width: 0;
+}
+
+.lm-account-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lm-account-badge {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+
+.lm-account-desc {
+  margin: 8px 0 14px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.lm-account-note {
+  margin: 0 0 12px;
+  padding: 10px 11px;
+  background: rgba(7, 13, 23, 0.45);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+/* ---------- 4. 成员列表 ---------- */
+
+.lm-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+
+.lm-account-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'main acts'
+    'meta meta';
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  background: rgba(7, 13, 23, 0.42);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.lm-account-row:hover {
+  border-color: rgba(143, 163, 191, 0.42);
+}
+
+.lm-account-row.is-off {
+  background: rgba(7, 13, 23, 0.24);
+}
+
+.lm-account-main {
+  grid-area: main;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.lm-account-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lm-account-row.is-off .lm-account-name {
+  color: var(--muted);
+}
+
+.lm-account-state {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.lm-account-state.is-on {
+  color: var(--mint);
+  border-color: rgba(61, 220, 151, 0.42);
+  background: rgba(61, 220, 151, 0.08);
+}
+
+.lm-account-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.lm-account-state.is-on .lm-account-dot {
+  background: var(--mint);
+  box-shadow: 0 0 6px rgba(61, 220, 151, 0.7);
+}
+
+/* 辅导员行上的「助理 N 人」 */
+.lm-account-sub {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1.7;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.lm-account-acts {
+  grid-area: acts;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.lm-account-acts .lm-account-act {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.lm-account-acts .lm-account-act.is-danger {
+  color: var(--red);
+  border-color: rgba(255, 107, 107, 0.42);
+}
+
+.lm-account-acts .lm-account-act.is-danger:hover {
+  color: var(--navy-900);
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.lm-account-meta {
+  grid-area: meta;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.lm-account-meta-k {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.85;
+  flex: 0 0 auto;
+}
+
+.lm-account-meta-v {
+  font-size: 11.5px;
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lm-account-meta-v.is-mono {
+  font-family: var(--font-mono);
+}
+
+.lm-account-meta-v.is-dim {
+  color: var(--muted);
+  font-family: var(--font-sans);
+}
+
+.lm-account-meta-dot {
+  flex: 0 0 auto;
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+/* ---------- 5. 空状态 ---------- */
+
+.lm-account-empty {
+  margin: 0 0 14px;
+  padding: 18px 16px;
+  background: rgba(7, 13, 23, 0.45);
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.lm-account-empty-t {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+.lm-account-empty-h {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.lm-account-loaderr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.lm-account-loaderr .lm-account-msg {
+  flex: 1 1 200px;
+  margin: 0;
+}
+
+/* ---------- 6. 一次性密码（只显示这一次） ---------- */
+
+@keyframes lm-account-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lm-account-secret {
+  margin: 0 0 12px;
+  scroll-margin-block: 14px;
+  padding: 13px 14px 14px;
+  background: rgba(245, 181, 71, 0.08);
+  border: 1px solid rgba(245, 181, 71, 0.62);
+  border-left: 3px solid var(--amber);
+  border-radius: 12px;
+  animation: lm-account-rise 0.18s ease-out;
+}
+
+.lm-account-secret-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lm-account-secret-head .lm-counselor-eyebrow {
+  color: var(--amber);
+  opacity: 0.85;
+}
+
+.lm-account-secret-name {
+  flex: 0 0 auto;
+  max-width: 52%;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--amber);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lm-account-secret-tip {
+  margin: 6px 0 10px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.lm-account-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lm-account-secret-key {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--navy-900);
+  border: 1px dashed rgba(245, 181, 71, 0.5);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  color: var(--amber);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+.lm-account-secret-row .lm-counselor-copybtn {
+  flex: 0 0 auto;
+  min-height: 40px;
+}
+
+.lm-account-secret-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* ---------- 7. 段内提示 ---------- */
+
+.lm-account-msg {
+  margin: 10px 0 0;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.lm-account-msg.is-err {
+  color: var(--red);
+  background: rgba(255, 107, 107, 0.08);
+  border-color: rgba(255, 107, 107, 0.3);
+}
+
+.lm-account-msg.is-ok {
+  color: var(--mint);
+  background: rgba(61, 220, 151, 0.08);
+  border-color: rgba(61, 220, 151, 0.28);
+}
+
+/* ---------- 8. 添加成员 ---------- */
+
+.lm-account-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 4px;
+}
+
+.lm-account-field {
+  min-width: 0;
+}
+
+.lm-account-label {
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.lm-account-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--navy-900);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.lm-account-input:hover {
+  border-color: rgba(143, 163, 191, 0.42);
+}
+
+.lm-account-input:focus {
+  outline: none;
+  border-color: var(--mint);
+  box-shadow: 0 0 0 3px rgba(61, 220, 151, 0.14);
+}
+
+.lm-account-input::placeholder {
+  color: rgba(143, 163, 191, 0.62);
+}
+
+.lm-account-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.lm-account-addbtn {
+  min-height: 44px;
+  padding: 0 16px;
+}
+
+.lm-account-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---------- 9. 窄屏：操作换到单独一行 ---------- */
+
+@media (max-width: 560px) {
+  .lm-account-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'main'
+      'meta'
+      'acts';
+  }
+
+  .lm-account-acts {
+    justify-content: flex-start;
+  }
+
+  .lm-account-add {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lm-account-addbtn {
+    width: 100%;
+  }
+
+  .lm-account-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-account-secret {
+    animation: none;
+  }
+}

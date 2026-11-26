@@ -104,7 +104,17 @@ export const buildNudge = (id, payload) =>
 
 export const exportCsvUrl = (id) => `/api/notices/${id}/export.csv?k=${encodeURIComponent(getCounselorKey())}`
 
-export const getRoster = () => req('/api/roster', { counselor: true })
+export const getRoster = (query) => {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(query || {})) {
+    if (v !== undefined && v !== null && v !== '') q.set(k, String(v))
+  }
+  const qs = q.toString()
+  return req('/api/roster' + (qs ? '?' + qs : ''), { counselor: true })
+}
+
+/* 名单体检：只给提示，不改数据 */
+export const checkRoster = () => req('/api/roster/check', { method: 'POST', body: {}, counselor: true })
 
 /* ---------- 身份 / 助理账号 ---------- */
 
@@ -114,6 +124,12 @@ export const createStaff = (name) => req('/api/staff', { method: 'POST', body: {
 export const updateStaff = (id, patch) =>
   req(`/api/staff/${id}`, { method: 'PATCH', body: patch, counselor: true })
 export const deleteStaff = (id) => req(`/api/staff/${id}`, { method: 'DELETE', counselor: true })
+
+/* 自己的发件邮箱 */
+export const getMyEmail = () => req('/api/staff/me/email', { counselor: true })
+export const setMyEmail = (payload) =>
+  req('/api/staff/me/email', { method: 'PUT', body: payload, counselor: true })
+export const clearMyEmail = () => req('/api/staff/me/email', { method: 'DELETE', counselor: true })
 
 /* ---------- 花名册 ---------- */
 

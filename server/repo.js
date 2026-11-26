@@ -9,7 +9,7 @@
 import { getDb, nowIso, uid } from './db.js'
 
 const NOTICE_COLS =
-  'id, created_at, published_at, status, owner, raw_text, sent_at, kind, title_zh, deadline_at, structured, quiz, translations, risk_flags'
+  'id, created_at, published_at, status, owner, owner_staff_id, target_ids, raw_text, sent_at, kind, title_zh, deadline_at, structured, quiz, translations, risk_flags'
 
 /* ---------- prepared statement 缓存 ---------- */
 
@@ -55,13 +55,45 @@ function toObj(value, fallback) {
 /** node:sqlite 不接受 undefined 作为绑定参数 */
 const nn = (v) => (v === undefined ? null : v)
 
+/** 目标学号列表：NULL / [] 都表示「名下全部」，返回去重后的字符串数组或 null */
+function parseTargetIds(raw) {
+  const arr = parseJson(raw, null)
+  if (!Array.isArray(arr)) return null
+  const ids = [...new Set(arr.map((v) => String(v ?? '').trim()).filter(Boolean))]
+  return ids.length ? ids : null
+}
+
+/** 可见范围条件：scope = null（owner，全部）或 staff id（只看该账号名下的学生）。
+    作用在 students 表的列上，用于拼进 WHERE。 */
+function scopeConds(scope, targets, alias = '') {
+  const p = alias ? `${alias}.` : ''
+  const conds = []
+  const vals = []
+  if (targets && targets.length) {
+    conds.push(`${p}student_id IN (${targets.map(() => '?').join(',')})`)
+    vals.push(...targets)
+  }
+  if (scope !== null && scope !== undefined) {
+    conds.push(`${p}owner_staff_id = ?`)
+    vals.push(String(scope))
+  }
+  return { conds, vals }
+}
+
+/** 同上，但转成「student_id 落在可见学生里」的子查询，用于 receipts 这类只有 student_id 的表 */
+function visibleStudentSubquery(scope, targets) {
+  const { conds, vals } = scopeConds(scope, targets)
+  if (!conds.length) return { sql: '', vals: [] }
+  return { sql: ` AND student_id IN (SELECT student_id FROM students WHERE ${conds.join(' AND ')})`, vals }
+}
+
 /** 把 sqlite 的 null-prototype 行对象变成普通对象，方便 JSON 序列化 / 展开 */
 const plain = (row) => (row ? { ...row } : null)
 const plainAll = (rows) => (rows || []).map((r) => ({ ...r }))
 
 /* ---------- 行映射 ---------- */
 
-/** notices 行 → Notice（JSON 字段已解析） */
+/** notices 行 → Notice（JSON 字段已解析；target_ids 是数组或 null） */
 function mapNotice(row) {
   if (!row) return null
   const n = { ...row }
@@ -69,13 +101,15 @@ function mapNotice(row) {
   n.quiz = parseJson(n.quiz, null)
   n.translations = parseJson(n.translations, {})
   n.risk_flags = parseJson(n.risk_flags, [])
+  n.target_ids = parseTargetIds(n.target_ids)
   return n
 }
 
 /* ---------- notices ---------- */
 
-/** 建通知。input 可含 id / created_at / status / published_at / owner / raw_text / sent_at /
-    kind / title_zh / deadline_at / structured / quiz / translations / risk_flags */
+/** 建通知。input 可含 id / created_at / status / published_at / owner / owner_staff_id /
+    raw_text / sent_at / kind / title_zh / deadline_at / structured / quiz / translations /
+    risk_flags / target_ids（数组，空数组或 null = 发给名下全部学生） */
 function createNotice(input = {}) {
   const s = toObj(input.structured, {})
   const id = input.id || uid('ntc')
@@ -91,15 +125,18 @@ function createNotice(input = {}) {
   const riskFlags = input.risk_flags !== undefined ? input.risk_flags : s.risk_flags || []
   const publishedAt =
     input.published_at !== undefined ? input.published_at : status === 'published' ? createdAt : null
+  const targets = parseTargetIds(input.target_ids)
 
   q(
-    `INSERT INTO notices (${NOTICE_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO notices (${NOTICE_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     id,
     createdAt,
     nn(publishedAt),
     status,
     nn(input.owner),
+    nn(input.owner_staff_id),
+    targets ? JSON.stringify(targets) : null,
     rawText,
     nn(input.sent_at),
     kind,
@@ -123,6 +160,7 @@ function updateNotice(id, patch = {}) {
   for (const col of [
     'status',
     'owner',
+    'owner_staff_id',
     'raw_text',
     'sent_at',
     'kind',
@@ -133,6 +171,12 @@ function updateNotice(id, patch = {}) {
       sets.push(`${col} = ?`)
       vals.push(nn(patch[col]))
     }
+  }
+  // 目标学号：null / [] 都写 NULL（= 名下全部）
+  if (has('target_ids')) {
+    sets.push('target_ids = ?')
+    const ids = parseTargetIds(patch.target_ids)
+    vals.push(ids ? JSON.stringify(ids) : null)
   }
   // 可空时间
   if (has('deadline_at')) {
@@ -187,9 +231,14 @@ function getNotice(id) {
   return mapNotice(plain(q(`SELECT ${NOTICE_COLS} FROM notices WHERE id = ?`).get(String(id))))
 }
 
-/** 全部通知，新的在前 */
-function listNotices() {
-  return q(`SELECT ${NOTICE_COLS} FROM notices ORDER BY created_at DESC`).all().map(mapNotice)
+/** 通知列表，新的在前。scope = null（owner）看全部；否则只看该账号名下发布的 */
+function listNotices(scope = null) {
+  if (scope === null || scope === undefined) {
+    return q(`SELECT ${NOTICE_COLS} FROM notices ORDER BY created_at DESC`).all().map(mapNotice)
+  }
+  return q(`SELECT ${NOTICE_COLS} FROM notices WHERE owner_staff_id = ? ORDER BY created_at DESC`)
+    .all(String(scope))
+    .map(mapNotice)
 }
 
 /** 删一份通知：回执、小测记录、拒绝日志、事件一并清掉（一个事务里做完） */
@@ -279,10 +328,16 @@ function listReceipts(noticeId) {
   )
 }
 
-/** 看板计数：roster 取 students 总人数，其余从 receipts 派生，unread = roster - seen */
-function counts(noticeId) {
-  const rosterRow = q('SELECT COUNT(*) AS c FROM students').get()
-  const roster = Number(rosterRow?.c || 0)
+/** 看板计数：roster 取「目标学生数」（target_ids 为空 = 可见学生数），
+    其余从 receipts 派生，unread = roster - seen。
+    scope 与通知的目标一起决定分母，保证看板不会出现 confirmed > roster。 */
+function counts(noticeId, scope = null) {
+  const nid = String(noticeId)
+  const row = q('SELECT target_ids FROM notices WHERE id = ?').get(nid)
+  const targets = parseTargetIds(row?.target_ids)
+  const roster = countStudents(scope, targets)
+
+  const sub = visibleStudentSubquery(scope, targets)
   const r =
     q(
       `SELECT
@@ -291,8 +346,8 @@ function counts(noticeId) {
          SUM(CASE WHEN quiz_passed_at IS NOT NULL THEN 1 ELSE 0 END) AS quiz_passed,
          SUM(CASE WHEN confirmed_at   IS NOT NULL THEN 1 ELSE 0 END) AS confirmed,
          SUM(CASE WHEN help_at        IS NOT NULL THEN 1 ELSE 0 END) AS help
-       FROM receipts WHERE notice_id = ?`
-    ).get(String(noticeId)) || {}
+       FROM receipts WHERE notice_id = ?${sub.sql}`
+    ).get(nid, ...sub.vals) || {}
 
   const seen = Number(r.seen || 0)
   return {
@@ -382,8 +437,33 @@ function listEvents(noticeId, limit = 100) {
 
 /* ---------- roster ---------- */
 
-function listStudents() {
-  return plainAll(q('SELECT * FROM students ORDER BY student_id ASC').all())
+/** 转义 LIKE 里的通配符，避免搜「100%」把整张表都搜出来 */
+const likeArg = (s) => `%${String(s).replace(/[\\%_]/g, (m) => '\\' + m)}%`
+
+/** 名单查询。opts: { scope, q, degree, grade, lang, class_no }
+    scope = null（owner）看全部，否则只看 owner_staff_id = scope 的学生 */
+function listStudents(opts = {}) {
+  const { scope = null, q: kw, degree, grade, lang, class_no } = opts || {}
+  const { conds, vals } = scopeConds(scope, null)
+  const text = String(kw ?? '').trim()
+  if (text) {
+    conds.push(`(student_id LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' OR name_en LIKE ? ESCAPE '\\')`)
+    const like = likeArg(text)
+    vals.push(like, like, like)
+  }
+  for (const [col, value] of [
+    ['degree', degree],
+    ['grade', grade],
+    ['lang', lang],
+    ['class_no', class_no]
+  ]) {
+    const v = String(value ?? '').trim()
+    if (!v) continue
+    conds.push(`${col} = ?`)
+    vals.push(v)
+  }
+  const where = conds.length ? ` WHERE ${conds.join(' AND ')}` : ''
+  return plainAll(q(`SELECT * FROM students${where} ORDER BY student_id ASC`).all(...vals))
 }
 
 function getStudent(studentId) {
@@ -391,19 +471,36 @@ function getStudent(studentId) {
   return plain(q('SELECT * FROM students WHERE student_id = ?').get(String(studentId)))
 }
 
-/** 名单 LEFT JOIN 回执，看板用（status 由这里算，保证「已确认 / 求助 / 只看到 / 未读」四态一致） */
-function rosterWithReceipts(noticeId) {
+/** 按学号批量取，且必须落在可见范围内（发通知时校验 target_ids 用） */
+function getStudentsByIds(ids, scope = null) {
+  const list = [...new Set((Array.isArray(ids) ? ids : []).map((v) => String(v ?? '').trim()).filter(Boolean))]
+  if (!list.length) return []
+  const { conds, vals } = scopeConds(scope, list)
+  return plainAll(
+    q(`SELECT * FROM students WHERE ${conds.join(' AND ')} ORDER BY student_id ASC`).all(...vals)
+  )
+}
+
+/** 名单 LEFT JOIN 回执，看板用（status 由这里算，保证「已确认 / 求助 / 只看到 / 未读」四态一致）。
+    只返回通知的目标学生（target_ids 为空 = 范围内全部学生）。 */
+function rosterWithReceipts(noticeId, scope = null) {
+  const nid = String(noticeId)
+  const row = q('SELECT target_ids FROM notices WHERE id = ?').get(nid)
+  const targets = parseTargetIds(row?.target_ids)
+  const { conds, vals } = scopeConds(scope, targets, 's')
+  const where = conds.length ? ` WHERE ${conds.join(' AND ')}` : ''
   const rows = plainAll(
     q(
       `SELECT s.student_id, s.name, s.name_en, s.lang, s.class_no, s.cohort,
+              s.nationality, s.email, s.degree, s.grade,
               r.first_seen_at, r.quiz_passed_at, r.confirmed_at, r.help_at, r.help_message,
               r.lang AS receipt_lang,
               (SELECT COUNT(*) FROM quiz_attempts qa
                 WHERE qa.notice_id = ? AND qa.student_id = s.student_id AND qa.correct = 1) AS quiz_correct
        FROM students s
-       LEFT JOIN receipts r ON r.notice_id = ? AND r.student_id = s.student_id
+       LEFT JOIN receipts r ON r.notice_id = ? AND r.student_id = s.student_id${where}
        ORDER BY s.student_id ASC`
-    ).all(String(noticeId), String(noticeId))
+    ).all(nid, nid, ...vals)
   )
   return rows.map((r) => ({
     ...r,
@@ -414,15 +511,20 @@ function rosterWithReceipts(noticeId) {
 
 /* ---------- staff（辅导员 + 助理账号） ---------- */
 
+/** 全部账号（含 parent_id / 邮箱绑定信息）。给 owner 账号用的隐藏行也在这里返回，
+    权限过滤由 api 层按角色做（SQL 不该知道 HTTP 语义）。 */
 function listStaff() {
   return plainAll(
     q(
-      'SELECT id, name, role, active, created_at, last_seen_at, access_key FROM staff ORDER BY created_at ASC'
+      `SELECT id, name, role, active, created_at, last_seen_at, access_key,
+              parent_id, email, email_from, email_provider, email_api_key
+         FROM staff ORDER BY created_at ASC`
     ).all()
   )
 }
 
 function getStaff(id) {
+  if (!id) return null
   return plain(q('SELECT * FROM staff WHERE id = ?').get(String(id)))
 }
 
@@ -431,25 +533,39 @@ function getStaffByKey(key) {
   return plain(q('SELECT * FROM staff WHERE access_key = ? AND active = 1').get(String(key)))
 }
 
-function createStaffRow(row) {
+/** 建账号。row 可含 id / name / access_key / role / active / created_at / parent_id /
+    email / email_from / email_provider / email_api_key */
+function createStaffRow(row = {}) {
   const id = row.id || uid('stf')
   q(
-    `INSERT INTO staff (id, name, access_key, role, active, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, NULL)`
-  ).run(id, String(row.name), String(row.access_key), row.role || 'assistant', 1, row.created_at || nowIso())
+    `INSERT INTO staff
+       (id, name, access_key, role, active, created_at, parent_id,
+        email, email_from, email_provider, email_api_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    String(row.name),
+    String(row.access_key),
+    row.role || 'assistant',
+    row.active === undefined ? 1 : row.active ? 1 : 0,
+    row.created_at || nowIso(),
+    nn(row.parent_id),
+    nn(row.email),
+    nn(row.email_from),
+    nn(row.email_provider),
+    nn(row.email_api_key)
+  )
   return getStaff(id)
 }
 
 function updateStaffRow(id, patch = {}) {
   const sets = []
   const vals = []
-  if (patch.name !== undefined) {
-    sets.push('name = ?')
-    vals.push(String(patch.name))
-  }
-  if (patch.access_key !== undefined) {
-    sets.push('access_key = ?')
-    vals.push(String(patch.access_key))
+  // 文本字段：null 表示清空（邮箱解绑），undefined 表示不动
+  for (const col of ['name', 'access_key', 'parent_id', 'email', 'email_from', 'email_provider', 'email_api_key']) {
+    if (patch[col] === undefined) continue
+    sets.push(`${col} = ?`)
+    vals.push(patch[col] === null ? null : String(patch[col]))
   }
   if (patch.active !== undefined) {
     sets.push('active = ?')
@@ -465,66 +581,118 @@ function updateStaffRow(id, patch = {}) {
   return getStaff(id)
 }
 
+/** 删账号：助理跟着所属辅导员一起删；他名下的学生回到「未分配」（只有总管能看见）。 */
 function deleteStaffRow(id) {
-  q('DELETE FROM staff WHERE id = ?').run(String(id))
+  const sid = String(id)
+  const d = getDb()
+  let assistants = 0
+  let students = 0
+  d.exec('BEGIN')
+  try {
+    assistants = Number(q('SELECT COUNT(*) AS c FROM staff WHERE parent_id = ?').get(sid)?.c || 0)
+    students = Number(q('SELECT COUNT(*) AS c FROM students WHERE owner_staff_id = ?').get(sid)?.c || 0)
+    q('DELETE FROM staff WHERE parent_id = ?').run(sid)
+    q('UPDATE students SET owner_staff_id = NULL WHERE owner_staff_id = ?').run(sid)
+    q('DELETE FROM staff WHERE id = ?').run(sid)
+    d.exec('COMMIT')
+  } catch (e) {
+    try {
+      d.exec('ROLLBACK')
+    } catch {}
+    throw e
+  }
+  return { assistants, students }
 }
 
 /* ---------- roster 导入 ---------- */
 
-function countStudents() {
-  const r = q('SELECT COUNT(*) AS c FROM students').get()
+/** 人数统计（scope = null 统计全部；给了 targets 再按学号收窄） */
+function countStudents(scope = null, targets = null) {
+  const { conds, vals } = scopeConds(scope, targets)
+  const where = conds.length ? ` WHERE ${conds.join(' AND ')}` : ''
+  const r = q(`SELECT COUNT(*) AS c FROM students${where}`).get(...vals)
   return Number(r?.c || 0)
 }
 
-function countDemoStudents() {
-  const r = q('SELECT COUNT(*) AS c FROM students WHERE is_demo = 1').get()
+function countDemoStudents(scope = null) {
+  const { conds, vals } = scopeConds(scope, null)
+  conds.push('is_demo = 1')
+  const r = q(`SELECT COUNT(*) AS c FROM students WHERE ${conds.join(' AND ')}`).get(...vals)
   return Number(r?.c || 0)
 }
 
-/** 返回 'added' | 'updated' */
-function upsertStudent(s) {
+/** 返回 'added' | 'updated'。
+    owner 导入记 NULL（只有总管可见）；辅导员/助理导入记自己的 scope。
+    已归属某个辅导员的学生不会被 owner 的一次导入「收回」，也不会被另一个辅导员抢走。 */
+function upsertStudent(s, ownerStaffId = null) {
   const sid = String(s.student_id || '').trim()
   if (!sid) return 'skipped'
   const existed = q('SELECT 1 AS x FROM students WHERE student_id = ?').get(sid)
   q(
-    `INSERT INTO students (student_id, name, name_en, lang, class_no, cohort, is_demo)
-     VALUES (?, ?, ?, ?, ?, ?, 0)
+    `INSERT INTO students
+       (student_id, name, name_en, lang, class_no, cohort, is_demo,
+        nationality, email, degree, grade, owner_staff_id)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
      ON CONFLICT(student_id) DO UPDATE SET
-       name      = COALESCE(NULLIF(excluded.name, ''), students.name),
-       name_en   = COALESCE(NULLIF(excluded.name_en, ''), students.name_en),
-       lang      = COALESCE(NULLIF(excluded.lang, ''), students.lang),
-       class_no  = COALESCE(NULLIF(excluded.class_no, ''), students.class_no),
-       cohort    = COALESCE(NULLIF(excluded.cohort, ''), students.cohort),
-       is_demo   = 0`
-  ).run(sid, s.name ?? null, s.name_en ?? null, s.lang ?? null, s.class_no ?? null, s.cohort ?? null)
+       name         = COALESCE(NULLIF(excluded.name, ''), students.name),
+       name_en      = COALESCE(NULLIF(excluded.name_en, ''), students.name_en),
+       lang         = COALESCE(NULLIF(excluded.lang, ''), students.lang),
+       class_no     = COALESCE(NULLIF(excluded.class_no, ''), students.class_no),
+       cohort       = COALESCE(NULLIF(excluded.cohort, ''), students.cohort),
+       nationality  = COALESCE(NULLIF(excluded.nationality, ''), students.nationality),
+       email        = COALESCE(NULLIF(excluded.email, ''), students.email),
+       degree       = COALESCE(NULLIF(excluded.degree, ''), students.degree),
+       grade        = COALESCE(NULLIF(excluded.grade, ''), students.grade),
+       owner_staff_id = COALESCE(students.owner_staff_id, excluded.owner_staff_id),
+       is_demo      = 0`
+  ).run(
+    sid,
+    s.name ?? null,
+    s.name_en ?? null,
+    s.lang ?? null,
+    s.class_no ?? null,
+    s.cohort ?? null,
+    s.nationality ?? null,
+    s.email ?? null,
+    s.degree ?? null,
+    s.grade ?? null,
+    ownerStaffId === null || ownerStaffId === undefined ? null : String(ownerStaffId)
+  )
   return existed ? 'updated' : 'added'
 }
 
-function deleteAllStudents() {
-  const before = countStudents()
-  q('DELETE FROM students').run()
+/** 清空名单：owner（scope = null）清全部，辅导员只清自己名下的 */
+function deleteAllStudents(scope = null) {
+  const before = countStudents(scope)
+  const { conds, vals } = scopeConds(scope, null)
+  const where = conds.length ? ` WHERE ${conds.join(' AND ')}` : ''
+  q(`DELETE FROM students${where}`).run(...vals)
   return before
 }
 
-function deleteDemoStudents() {
-  const before = countStudents()
-  q('DELETE FROM students WHERE is_demo = 1').run()
-  return before - countStudents()
+function deleteDemoStudents(scope = null) {
+  const before = countStudents(scope)
+  const { conds, vals } = scopeConds(scope, null)
+  conds.push('is_demo = 1')
+  q(`DELETE FROM students WHERE ${conds.join(' AND ')}`).run(...vals)
+  return before - countStudents(scope)
 }
 
 /** 只删导入进来的真实学生，示例学生留着 */
-function deleteImportedStudents() {
-  const before = countStudents()
-  q('DELETE FROM students WHERE is_demo = 0').run()
-  return before - countStudents()
+function deleteImportedStudents(scope = null) {
+  const before = countStudents(scope)
+  const { conds, vals } = scopeConds(scope, null)
+  conds.push('is_demo = 0')
+  q(`DELETE FROM students WHERE ${conds.join(' AND ')}`).run(...vals)
+  return before - countStudents(scope)
 }
 
-function insertStudentsBulk(rows) {
+function insertStudentsBulk(rows, ownerStaffId = null) {
   let added = 0
   let updated = 0
   let skipped = 0
   for (const s of rows) {
-    const r = upsertStudent(s)
+    const r = upsertStudent(s, ownerStaffId)
     if (r === 'added') added++
     else if (r === 'updated') updated++
     else skipped++
@@ -532,17 +700,35 @@ function insertStudentsBulk(rows) {
   return { added, updated, skipped }
 }
 
-/** 恢复内置示例名单（is_demo = 1，不会被当成真实学生） */
+/** 恢复内置示例名单（is_demo = 1，owner_staff_id 一律 NULL —— 只有总管看得见） */
 function insertDemoStudents(rows) {
   let n = 0
   for (const s of rows) {
     const sid = String(s.student_id || '').trim()
     if (!sid) continue
     q(
-      `INSERT INTO students (student_id, name, name_en, lang, class_no, cohort, is_demo)
-       VALUES (?, ?, ?, ?, ?, ?, 1)
-       ON CONFLICT(student_id) DO UPDATE SET is_demo = 1`
-    ).run(sid, s.name ?? null, s.name_en ?? null, s.lang ?? null, s.class_no ?? null, s.cohort ?? null)
+      `INSERT INTO students
+         (student_id, name, name_en, lang, class_no, cohort, is_demo,
+          nationality, email, degree, grade, owner_staff_id)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, NULL)
+       ON CONFLICT(student_id) DO UPDATE SET
+         is_demo     = 1,
+         nationality = COALESCE(NULLIF(excluded.nationality, ''), students.nationality),
+         email       = COALESCE(NULLIF(excluded.email, ''), students.email),
+         degree      = COALESCE(NULLIF(excluded.degree, ''), students.degree),
+         grade       = COALESCE(NULLIF(excluded.grade, ''), students.grade)`
+    ).run(
+      sid,
+      s.name ?? null,
+      s.name_en ?? null,
+      s.lang ?? null,
+      s.class_no ?? null,
+      s.cohort ?? null,
+      s.nationality ?? null,
+      s.email ?? null,
+      s.degree ?? null,
+      s.grade ?? null
+    )
     n++
   }
   return n
@@ -571,6 +757,7 @@ export const repo = {
   // roster
   listStudents,
   getStudent,
+  getStudentsByIds,
   countStudents,
   countDemoStudents,
   upsertStudent,

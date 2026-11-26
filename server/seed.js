@@ -499,6 +499,19 @@ const PROTAGONISTS = {
   ru: { index: 12, name: 'Иванова Дарья', name_en: 'Daria Ivanova' } // 20260012 / ru / 2026-A
 }
 
+/* v2 花名册字段：只给几个学生补全 国籍 / 邮箱 / 学历 / 年级，
+   其余留空，好让「花名册检查」和「邮件通知」两条链路一演示就有真实缺口可看。
+   学号与姓名由 buildRoster 的确定性排布决定（20260001 泰国 / 20260002 俄罗斯 …），
+   这里的国籍与邮箱必须和「同一条记录」对得上，别把 A 的邮箱挂到 B 身上。 */
+const DEMO_PROFILES = {
+  '20260001': { nationality: '泰国', email: 'somchai.wattanakul@example.edu', degree: '本科', grade: '2026级' },
+  '20260002': { nationality: '俄罗斯', email: 'aleksei.petrov@example.edu', degree: '硕士', grade: '2026级' },
+  '20260003': { nationality: '美国', email: 'michael.johnson@example.edu', degree: '本科', grade: '2026级' },
+  '20260007': { nationality: '越南', email: 'nguyen.van.anh@example.edu', degree: '硕士', grade: '2026级' },
+  '20260012': { nationality: '俄罗斯', email: 'daria.ivanova@example.edu', degree: '硕士', grade: '2026级' },
+  '20260030': { nationality: '越南', email: 'le.van.minh@example.edu', degree: '本科', grade: '2026级' }
+}
+
 // 每个语言的姓名池，数量与配额完全一致（主角算在池里）
 const NAME_POOLS = {
   ru: [
@@ -695,13 +708,20 @@ export function buildRoster() {
       person = queues[lang].shift()
       if (!person) person = { name: `Student ${studentId}`, name_en: `Student ${studentId}` }
     }
+    const profile = DEMO_PROFILES[studentId] || {}
     roster.push({
       student_id: studentId,
       name: person.name,
       name_en: person.name_en,
       lang,
       class_no: CLASSES[Math.floor(i / CLASS_SIZE)] || CLASSES[CLASSES.length - 1],
-      cohort: COHORT
+      cohort: COHORT,
+      // 示例学生不属于任何辅导员：owner_staff_id = NULL，只有总管看得见
+      owner_staff_id: null,
+      nationality: profile.nationality ?? null,
+      email: profile.email ?? null,
+      degree: profile.degree ?? null,
+      grade: profile.grade ?? null
     })
   }
   return roster
@@ -764,14 +784,31 @@ function makeClock(publishedMs) {
 function insertStudents(db) {
   const roster = buildRoster()
   const ins = db.prepare(
-    `INSERT INTO students (student_id, name, name_en, lang, class_no, cohort, is_demo)
-     VALUES (?,?,?,?,?,?,1)
+    `INSERT INTO students
+       (student_id, name, name_en, lang, class_no, cohort, is_demo,
+        nationality, email, degree, grade, owner_staff_id)
+     VALUES (?,?,?,?,?,?,1,?,?,?,?,NULL)
      ON CONFLICT(student_id) DO UPDATE SET
        name = excluded.name, name_en = excluded.name_en, lang = excluded.lang,
-       class_no = excluded.class_no, cohort = excluded.cohort, is_demo = 1`
+       class_no = excluded.class_no, cohort = excluded.cohort, is_demo = 1,
+       nationality = COALESCE(excluded.nationality, students.nationality),
+       email = COALESCE(excluded.email, students.email),
+       degree = COALESCE(excluded.degree, students.degree),
+       grade = COALESCE(excluded.grade, students.grade)`
   )
   for (const s of roster) {
-    ins.run(s.student_id, s.name, s.name_en, s.lang, s.class_no, s.cohort)
+    ins.run(
+      s.student_id,
+      s.name,
+      s.name_en,
+      s.lang,
+      s.class_no,
+      s.cohort,
+      s.nationality ?? null,
+      s.email ?? null,
+      s.degree ?? null,
+      s.grade ?? null
+    )
   }
   return roster.length
 }

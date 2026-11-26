@@ -3,12 +3,14 @@
    数据只走 lib/api.js，不自己 fetch；错误留在面板里，除了清理操作的 window.confirm 之外不弹窗。 */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { clearRoster, getRoster, importRoster, restoreDemoRoster } from '../lib/api.js'
+import { checkRoster, clearRoster, getRoster, importRoster, restoreDemoRoster } from '../lib/api.js'
 import { errText } from './helpers.js'
 import { Btn, ErrBar, Eyebrow, Skel } from './ui.jsx'
 
 const EMPTY_MSG = { tone: '', text: '' }
 const PREVIEW_ROWS = 8
+const ROSTER_ROWS = 60
+const HINT_LIMIT = 8
 const DEMO_FALLBACK = 114
 
 /* ---------- 1. 字段与表头别名 ---------- */
@@ -18,10 +20,24 @@ const FIELD_LABEL = {
   name: '姓名',
   name_en: '英文名',
   lang: '语言',
+  nationality: '国籍',
+  email: '邮箱',
+  degree: '学历',
+  grade: '年级',
   class_no: '班级'
 }
 
-const FIELD_ORDER = ['student_id', 'name', 'name_en', 'lang', 'class_no']
+const FIELD_ORDER = [
+  'student_id',
+  'name',
+  'name_en',
+  'lang',
+  'nationality',
+  'email',
+  'degree',
+  'grade',
+  'class_no'
+]
 
 /* 表头别名。键一律是「归一化」后的写法：小写、去空格 / 下划线 / 点号 / 斜杠。 */
 const HEADER_ALIAS = {
@@ -54,6 +70,44 @@ const HEADER_ALIAS = {
   language: 'lang',
   母语: 'lang',
   语种: 'lang',
+
+  国籍: 'nationality',
+  国家: 'nationality',
+  国籍地区: 'nationality',
+  国家地区: 'nationality',
+  生源国: 'nationality',
+  nationality: 'nationality',
+  country: 'nationality',
+  nation: 'nationality',
+  citizenship: 'nationality',
+
+  邮箱: 'email',
+  邮件: 'email',
+  电子邮箱: 'email',
+  学生邮箱: 'email',
+  邮箱地址: 'email',
+  email: 'email',
+  mail: 'email',
+  emailaddress: 'email',
+  mailaddress: 'email',
+
+  学历: 'degree',
+  学位: 'degree',
+  学历层次: 'degree',
+  培养层次: 'degree',
+  degree: 'degree',
+  education: 'degree',
+  educationlevel: 'degree',
+  academicdegree: 'degree',
+
+  年级: 'grade',
+  入学年级: 'grade',
+  入学年份: 'grade',
+  级: 'grade',
+  grade: 'grade',
+  year: 'grade',
+  gradeyear: 'grade',
+  enrollmentyear: 'grade',
 
   班级: 'class_no',
   班号: 'class_no',
@@ -377,6 +431,10 @@ function buildRows(records, mapping) {
       name_en: cell('name_en'),
       lang: normLang(rawLang),
       langRaw: rawLang,
+      nationality: cell('nationality'),
+      email: cell('email'),
+      degree: cell('degree'),
+      grade: cell('grade'),
       class_no: cell('class_no'),
       issue
     })
@@ -384,13 +442,21 @@ function buildRows(records, mapping) {
 
   const ready = rows
     .filter((r) => !r.issue)
-    .map((r) => ({
-      student_id: r.student_id,
-      name: r.name,
-      name_en: r.name_en,
-      lang: r.lang,
-      class_no: r.class_no
-    }))
+    .map((r) => {
+      const out = {
+        student_id: r.student_id,
+        name: r.name,
+        name_en: r.name_en,
+        lang: r.lang,
+        class_no: r.class_no
+      }
+      /* 新字段只在文件里真有值时上报：这一列没导进来，就别拿空值去覆盖已有邮箱 / 学历 */
+      if (r.nationality) out.nationality = r.nationality
+      if (r.email) out.email = r.email
+      if (r.degree) out.degree = r.degree
+      if (r.grade) out.grade = r.grade
+      return out
+    })
 
   return { rows, ready, emptyId, dup }
 }
@@ -405,6 +471,19 @@ function num(value) {
 function isDemoRow(row) {
   const v = row && row.is_demo
   return v === true || v === 1 || v === '1' || v === 'true'
+}
+
+function hasText(v) {
+  return String(v === null || v === undefined ? '' : v).trim() !== ''
+}
+
+/* 一条提示的唯一键：同一个人、同一字段、同一句话只算一条 */
+function hintKey(h) {
+  return [h && h.student_id, h && h.field, h && h.message].join('|')
+}
+
+function hintLevel(h) {
+  return h && h.level === 'info' ? 'info' : 'warn'
 }
 
 /* ---------- 7. 面板 ---------- */
@@ -429,6 +508,14 @@ export default function RosterPanel({ open, onClose }) {
   const [importMsg, setImportMsg] = useState(EMPTY_MSG)
   const [cleanMsg, setCleanMsg] = useState(EMPTY_MSG)
 
+  /* 名单体检（只提示，不改数据） */
+  const [hints, setHints] = useState(null)
+  const [scanned, setScanned] = useState(0)
+  const [checking, setChecking] = useState(false)
+  const [checkErr, setCheckErr] = useState('')
+  const [ignoredHints, setIgnoredHints] = useState([])
+  const [hintsOpen, setHintsOpen] = useState(false)
+
   const seq = useRef(0)
   const panelRef = useRef(null)
   const closeRef = useRef(null)
@@ -449,13 +536,24 @@ export default function RosterPanel({ open, onClose }) {
   const total = roster ? roster.total : 0
   const demo = roster ? roster.demo : 0
   const imported = roster ? roster.imported : 0
+  const students = roster ? roster.students : []
+  const emailCount = roster ? roster.emailCount : 0
+  /* 命中的提示条数：没检查过就是 null，跟「真的是 0 条」分得开 */
+  const hintCount = hints ? hints.length : null
+  const visibleHints = useMemo(
+    () => (hints || []).filter((h) => ignoredHints.indexOf(hintKey(h)) === -1),
+    [hints, ignoredHints]
+  )
+  const shownHints = hintsOpen ? visibleHints : visibleHints.slice(0, HINT_LIMIT)
+  const restHints = visibleHints.length - shownHints.length
+  const rosterTruncated = students.length > ROSTER_ROWS
   const demoLabel = !roster
     ? `保留示例学生（${DEMO_FALLBACK} 个）`
     : demo > 0
       ? `保留示例学生（${demo} 个）`
       : '保留示例学生（已清空）'
 
-  /* 拉一次人数；连点时旧请求回来不覆盖新结果 */
+  /* 拉一次人数 + 名单；连点时旧请求回来不覆盖新结果 */
   async function load() {
     const my = ++seq.current
     setLoading(true)
@@ -475,10 +573,13 @@ export default function RosterPanel({ open, onClose }) {
       /* 后端没给 demo_count 时按 is_demo 自己数，别把「导入学生」算成负数 */
       const demoSafe =
         data && data.demo_count !== undefined && Number.isFinite(demoNum) ? demoNum : demoFromList
+      const safeList = list.filter((s) => s && hasText(s.student_id))
       const summary = {
         total: totalSafe,
         demo: demoSafe,
-        imported: Math.max(0, totalSafe - demoSafe)
+        imported: Math.max(0, totalSafe - demoSafe),
+        students: safeList,
+        emailCount: safeList.filter((s) => hasText(s.email)).length
       }
       setRoster(summary)
       return summary
@@ -489,6 +590,46 @@ export default function RosterPanel({ open, onClose }) {
     } finally {
       if (my === seq.current) setLoading(false)
     }
+  }
+
+  /* 检查名单：只拿提示，不动任何数据 */
+  async function doCheck() {
+    if (checking) return
+    setChecking(true)
+    setCheckErr('')
+    try {
+      const res = await checkRoster()
+      const list = res && Array.isArray(res.hints) ? res.hints : []
+      setHints(
+        list
+          .filter((h) => h && typeof h === 'object')
+          .map((h, i) => ({
+            key: hintKey(h) + '#' + i,
+            student_id: hasText(h.student_id) ? String(h.student_id).trim() : '',
+            name: hasText(h.name) ? String(h.name).trim() : '',
+            field: hasText(h.field) ? String(h.field).trim() : '',
+            level: hintLevel(h),
+            message: hasText(h.message)
+              ? String(h.message).trim()
+              : `${hintLevel(h) === 'warn' ? '信息有问题' : '可以补一下'}：${[h.student_id, h.field]
+                  .filter(Boolean)
+                  .join(' · ') || '这条提示没说清是哪个字段'}`
+          }))
+      )
+      setScanned(Number(res && res.scanned) || 0)
+      setHintsOpen(false)
+    } catch (e) {
+      setHints(null)
+      setCheckErr(errText(e))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  /* 单独忽略一条（只在前端隐藏，数据一点没动） */
+  function ignoreHint(h) {
+    const k = hintKey(h)
+    setIgnoredHints((prev) => (prev.indexOf(k) === -1 ? prev.concat([k]) : prev))
   }
 
   /* 每次打开都重置面板，并刷新一次人数 */
@@ -506,6 +647,12 @@ export default function RosterPanel({ open, onClose }) {
     setBusy('')
     setImportMsg(EMPTY_MSG)
     setCleanMsg(EMPTY_MSG)
+    setHints(null)
+    setScanned(0)
+    setChecking(false)
+    setCheckErr('')
+    setIgnoredHints([])
+    setHintsOpen(false)
     load()
     return () => {
       /* 关掉面板：把这次读取作废 */
@@ -667,6 +814,9 @@ export default function RosterPanel({ open, onClose }) {
       setMappingOverride(null)
       setSkipFirstOverride(null)
       setMapOpen(false)
+      /* 名单变了，上一次的体检结果就作废，别拿旧提示吓人 */
+      setHints(null)
+      setIgnoredHints([])
       await load()
     } catch (e) {
       setImportMsg({ tone: 'err', text: errText(e) })
@@ -689,6 +839,8 @@ export default function RosterPanel({ open, onClose }) {
         tone: 'ok',
         text: `已清空 ${num(res && res.removed)} 人，当前共 ${num(res && res.total)} 人`
       })
+      setHints(null)
+      setIgnoredHints([])
       await load()
     } catch (e) {
       setCleanMsg({ tone: 'err', text: errText(e) })
@@ -710,6 +862,8 @@ export default function RosterPanel({ open, onClose }) {
       const res = await restoreDemoRoster()
       /* 服务端的 added 是「处理了几条」，这里按人数差算真正补回来的数量 */
       const summary = await load()
+      setHints(null)
+      setIgnoredHints([])
       const now = summary ? summary.total : num(res && res.total)
       const added = Math.max(0, now - before)
       setCleanMsg({
@@ -780,7 +934,7 @@ export default function RosterPanel({ open, onClose }) {
 
             {roster ? (
               <>
-                <div className="lm-roster-stats">
+                <div className="lm-roster-stats is-five">
                   <div className="lm-roster-stat">
                     <div className="lm-roster-stat-num is-total">{total}</div>
                     <div className="lm-roster-stat-label">总人数</div>
@@ -793,10 +947,21 @@ export default function RosterPanel({ open, onClose }) {
                     <div className="lm-roster-stat-num">{imported}</div>
                     <div className="lm-roster-stat-label">导入学生</div>
                   </div>
+                  <div className="lm-roster-stat">
+                    <div className="lm-roster-stat-num is-email">{emailCount}</div>
+                    <div className="lm-roster-stat-label">有邮箱的</div>
+                  </div>
+                  <div className="lm-roster-stat">
+                    <div className={`lm-roster-stat-num is-hint${hintCount > 0 ? ' is-bad' : ''}`}>
+                      {hintCount === null ? '—' : hintCount}
+                    </div>
+                    <div className="lm-roster-stat-label">有问题的</div>
+                  </div>
                 </div>
 
                 <p className="lm-roster-note">
-                  所有计数（已确认 x/y、未读）的分母都取这里的总人数。
+                  所有计数（已确认 x/y、未读）的分母都取这里的总人数；「有问题的」是上一次「检查名单」
+                  的提示条数，没查过就是 —。
                 </p>
 
                 {total === 0 ? (
@@ -806,6 +971,156 @@ export default function RosterPanel({ open, onClose }) {
                 ) : null}
 
                 {loading ? <p className="lm-roster-hint">刷新中…</p> : null}
+
+                {/* ---------- A2. 名单体检：只提示，不改数据 ---------- */}
+                <div className="lm-roster-checkrow">
+                  <Btn size="sm" onClick={doCheck} disabled={busyAny || checking || !roster}>
+                    {checking ? '检查中…' : hints ? '重新检查' : '检查名单'}
+                  </Btn>
+                  <span className="lm-roster-checkrow-note">
+                    查邮箱 / 学历 / 年级 / 国籍缺不缺、格式对不对。只提示，不会改任何一行数据。
+                  </span>
+                </div>
+
+                {checkErr ? (
+                  <ErrBar message={checkErr} onRetry={doCheck} retryLabel="重试" />
+                ) : null}
+
+                {hints ? (
+                  visibleHints.length === 0 ? (
+                    <p className="lm-roster-hint is-ok">
+                      没查出问题：邮箱、学历、年级、国籍都在。
+                      {ignoredHints.length
+                        ? `另外有 ${ignoredHints.length} 条提示被你手动忽略了。`
+                        : ''}
+                    </p>
+                  ) : (
+                    <div className="lm-roster-hints">
+                      <div className="lm-roster-hints-head">
+                        <span className="lm-roster-hints-title">
+                          名单体检 · {visibleHints.length} 条提示
+                        </span>
+                        <span className="lm-roster-hints-sub">
+                          {scanned ? `扫了 ${scanned} 人 · ` : ''}只提示，不改数据
+                          {ignoredHints.length ? ` · 已忽略 ${ignoredHints.length} 条` : ''}
+                        </span>
+                        {ignoredHints.length ? (
+                          <button
+                            type="button"
+                            className="lm-roster-textbtn"
+                            onClick={() => setIgnoredHints([])}
+                          >
+                            恢复已忽略
+                          </button>
+                        ) : null}
+                      </div>
+
+                      <ul className="lm-roster-hintlist">
+                        {shownHints.map((h) => (
+                          <li className={`lm-roster-hintrow is-${h.level}`} key={h.key}>
+                            <span className="lm-roster-hintrow-dot" aria-hidden="true" />
+                            <span className="lm-roster-hintrow-text">{h.message}</span>
+                            <span className="lm-roster-hintrow-meta">
+                              {h.student_id}
+                              {h.field ? ` · ${FIELD_LABEL[h.field] || h.field}` : ''}
+                            </span>
+                            <button
+                              type="button"
+                              className="lm-roster-hintrow-ignore"
+                              onClick={() => ignoreHint(h)}
+                              title="只在前端隐藏这一条，学生数据不会被改"
+                            >
+                              知道了
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+
+                      {restHints > 0 ? (
+                        <button
+                          type="button"
+                          className="lm-roster-hints-more"
+                          onClick={() => setHintsOpen(true)}
+                        >
+                          还有 {restHints} 条
+                        </button>
+                      ) : null}
+                      {hintsOpen && visibleHints.length > HINT_LIMIT ? (
+                        <button
+                          type="button"
+                          className="lm-roster-hints-more"
+                          onClick={() => setHintsOpen(false)}
+                        >
+                          收起到前 {HINT_LIMIT} 条
+                        </button>
+                      ) : null}
+                    </div>
+                  )
+                ) : hints === null ? (
+                  <p className="lm-roster-hint">
+                    点「检查名单」看看谁缺邮箱、学历、年级或国籍，以及谁的邮箱格式不对。
+                  </p>
+                ) : null}
+
+                {/* ---------- A3. 名单明细 ---------- */}
+                {students.length ? (
+                  <>
+                    <div className="lm-roster-tablewrap is-roster">
+                      <table className="lm-roster-table is-roster">
+                        <thead>
+                          <tr>
+                            <th>学号</th>
+                            <th>姓名</th>
+                            <th>国籍</th>
+                            <th>邮箱</th>
+                            <th>学历</th>
+                            <th>年级</th>
+                            <th>班级</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {students.slice(0, ROSTER_ROWS).map((s) => (
+                            <tr className="lm-roster-tr" key={s.student_id}>
+                              <td className="lm-roster-td-id">
+                                <span className="lm-roster-id">{s.student_id}</span>
+                                {isDemoRow(s) ? (
+                                  <span className="lm-roster-badge is-demo">示例</span>
+                                ) : null}
+                              </td>
+                              <td className="lm-roster-td-name">
+                                {s.name || s.name_en || (
+                                  <span className="lm-roster-cell-empty">—</span>
+                                )}
+                                {s.name && s.name_en ? (
+                                  <span className="lm-roster-name-en">{s.name_en}</span>
+                                ) : null}
+                              </td>
+                              <td>
+                                {s.nationality || <span className="lm-roster-cell-empty">缺</span>}
+                              </td>
+                              <td className="lm-roster-td-email">
+                                {s.email ? (
+                                  <span className="lm-roster-email">{s.email}</span>
+                                ) : (
+                                  <span className="lm-roster-cell-empty">缺</span>
+                                )}
+                              </td>
+                              <td>{s.degree || <span className="lm-roster-cell-empty">缺</span>}</td>
+                              <td>{s.grade || <span className="lm-roster-cell-empty">缺</span>}</td>
+                              <td>{s.class_no || <span className="lm-roster-cell-empty">—</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="lm-roster-hint">
+                      {rosterTruncated
+                        ? `只列出前 ${ROSTER_ROWS} 人（共 ${students.length} 人）。`
+                        : `共 ${students.length} 人。`}
+                      「缺」表示这一项是空的，点「检查名单」会逐条列出来。
+                    </p>
+                  </>
+                ) : null}
               </>
             ) : null}
           </section>
@@ -825,7 +1140,8 @@ export default function RosterPanel({ open, onClose }) {
               onChange={onPickFile}
             />
             <p className="lm-roster-hint">
-              支持 UTF-8 和 GBK（Windows 导出的 CSV 多半是 GBK）；表头中文英文都认。
+              支持 UTF-8 和 GBK（Windows 导出的 CSV 多半是 GBK）；表头中文英文都认，
+              包括「国籍 / nationality」「邮箱 / email」「学历 / degree」「年级 / grade」。
             </p>
 
             <div className="lm-roster-paste">
@@ -854,7 +1170,9 @@ export default function RosterPanel({ open, onClose }) {
                   setText(e.target.value)
                   setFileName('')
                 }}
-                placeholder={'学号\t姓名\t班级\n20230101\t张三\t计算机2301\n20230102\tLi Ming\t计算机2301'}
+                placeholder={
+                  '学号\t姓名\t国籍\t邮箱\t学历\t年级\t班级\n20230101\t张三\t中国\tzhang@example.com\t本科\t2023级\t计算机2301\n20230102\tLi Ming\t越南\tliming@example.com\t硕士\t2024级\t计算机2401'
+                }
               />
             </div>
 
@@ -945,13 +1263,15 @@ export default function RosterPanel({ open, onClose }) {
                     </div>
 
                     <div className="lm-roster-tablewrap">
-                      <table className="lm-roster-table">
+                      <table className="lm-roster-table is-preview">
                         <thead>
                           <tr>
                             <th>学号</th>
                             <th>姓名</th>
-                            <th>英文名</th>
-                            <th>语言</th>
+                            <th>国籍</th>
+                            <th>邮箱</th>
+                            <th>学历</th>
+                            <th>年级</th>
                             <th>班级</th>
                           </tr>
                         </thead>
@@ -980,20 +1300,34 @@ export default function RosterPanel({ open, onClose }) {
                                   <span className="lm-roster-badge is-dup">重复 · 只留第一条</span>
                                 ) : null}
                               </td>
-                              <td>{r.name || <span className="lm-roster-cell-empty">—</span>}</td>
-                              <td>{r.name_en || <span className="lm-roster-cell-empty">—</span>}</td>
-                              <td>
+                              <td className="lm-roster-td-name">
+                                {r.name || r.name_en || (
+                                  <span className="lm-roster-cell-empty">—</span>
+                                )}
+                                {r.name && r.name_en ? (
+                                  <span className="lm-roster-name-en">{r.name_en}</span>
+                                ) : null}
                                 {r.lang ? (
-                                  <>
-                                    <span className="lm-roster-lang-code">{r.lang}</span>
-                                    <span className="lm-roster-lang-text">
-                                      {LANG_TEXT[r.lang] || ''}
-                                    </span>
-                                  </>
+                                  <span
+                                    className="lm-roster-lang-code"
+                                    title={`语言：${LANG_TEXT[r.lang] || r.lang}`}
+                                  >
+                                    {r.lang}
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td>
+                                {r.nationality || <span className="lm-roster-cell-empty">—</span>}
+                              </td>
+                              <td className="lm-roster-td-email">
+                                {r.email ? (
+                                  <span className="lm-roster-email">{r.email}</span>
                                 ) : (
-                                  <span className="lm-roster-cell-empty">未填 · 按 en</span>
+                                  <span className="lm-roster-cell-empty">—</span>
                                 )}
                               </td>
+                              <td>{r.degree || <span className="lm-roster-cell-empty">—</span>}</td>
+                              <td>{r.grade || <span className="lm-roster-cell-empty">—</span>}</td>
                               <td>{r.class_no || <span className="lm-roster-cell-empty">—</span>}</td>
                             </tr>
                           ))}

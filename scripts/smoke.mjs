@@ -4,7 +4,7 @@
    全部通过会打印 PASS 清单，任一失败退出码 1。 */
 
 const BASE = process.env.BASE || 'http://localhost:3000'
-const KEY = process.env.COUNSELOR_KEY || '123456'
+const KEY = process.env.COUNSELOR_KEY || '12345678'
 const SID = '20260007'
 
 let pass = 0

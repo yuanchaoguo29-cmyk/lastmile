@@ -116,13 +116,23 @@ export default function NoticeDetail({
         if (!rawText) {
           throw new Error('这份草稿的原文不在这台浏览器里了，回列表重新粘一次更快')
         }
-        const res = await createNotice({ raw_text: rawText, structured: form, sent_at: sentAt })
+        const res = await createNotice({
+          raw_text: rawText,
+          structured: form,
+          sent_at: sentAt,
+          // 空数组/undefined 都表示「发给名下全部学生」
+          target_ids: Array.isArray(form.target_ids) && form.target_ids.length ? form.target_ids : null
+        })
         nid = res && res.notice && res.notice.id
         if (!nid) throw new Error('后端没有返回通知 id，发布没成功')
         setNoticeId(nid)
         setNotice(res.notice || null)
       } else {
-        const res = await patchNotice(nid, { structured: form, status: 'published' })
+        const res = await patchNotice(nid, {
+          structured: form,
+          status: 'published',
+          target_ids: Array.isArray(form.target_ids) && form.target_ids.length ? form.target_ids : null
+        })
         const n = res && (res.notice || res)
         if (n && typeof n === 'object' && n.id) {
           setNotice((prev) => ({ ...(prev || {}), ...n }))
@@ -152,7 +162,12 @@ export default function NoticeDetail({
         onDraftSaved(noticeId, { draft: form, raw_text: rawText, sent_at: sentAt })
       } else {
         if (!rawText) throw new Error('原文不在这台浏览器里了，回列表重新粘一次')
-        const res = await createNotice({ raw_text: rawText, structured: form, sent_at: sentAt })
+        const res = await createNotice({
+          raw_text: rawText,
+          structured: form,
+          sent_at: sentAt,
+          target_ids: Array.isArray(form.target_ids) && form.target_ids.length ? form.target_ids : null
+        })
         const nid = res && res.notice && res.notice.id
         if (!nid) throw new Error('后端没有返回通知 id，草稿没存上')
         /* 尽力落成草稿态，别让半成品直接出现在学生端 */

@@ -22,7 +22,8 @@ import {
   keyStatus,
   brokenKeyList
 } from './settings.js'
-import { safeEqual, secretSource, fingerprint } from './crypto.js'
+import { safeEqual, secretSource, fingerprint, encryptSecret, decryptSecret } from './crypto.js'
+import { sendMail } from './email.js'
 
 /* 兜底补载 .env：正式启动请用 `node --env-file-if-exists=.env server/index.js`。
    万一启动命令漏了 --env-file，这里补一次，保证 AI 与 COUNSELOR_KEY 不是空的。
@@ -72,8 +73,14 @@ const wrap = (fn) => (req, res, next) => {
   }
 }
 
-/** 辅导员口令（默认 123456，可在界面里改，改完写进 settings 表） */
-const counselorKey = () => process.env.COUNSELOR_KEY || '123456'
+/* 总管（owner）密码。契约冻结值 12345678（见 .env.example），
+   生产环境用 COUNSELOR_KEY 环境变量覆盖；后台改密码则落 settings 表。 */
+const DEFAULT_OWNER_KEY = '12345678'
+const counselorKey = () => process.env.COUNSELOR_KEY || DEFAULT_OWNER_KEY
+
+/** 带角色的登录态。owner 的 id 固定为 'owner'（不在 staff 表里，除了邮箱那行隐藏配置） */
+const OWNER_ID = 'owner'
+const OWNER_NAME = '总管'
 
 /* 登录失败限速：同一 IP 5 分钟内错 10 次，锁 5 分钟。
    目的是掐断「爆破辅导员密码 → 进后台替换/试探 API Key」这条路。 */
@@ -102,8 +109,8 @@ function authNoteFail(ip) {
   authFails.set(ip, rec)
 }
 
-/** /notices* 与 /roster 的鉴权：主密码（辅导员本人）或任一启用中的助理密码。
-    通过的请求挂 req.staff = { id, name, role }，用于留痕。
+/** /notices* /roster /staff /me 的鉴权：总管密码（COUNSELOR_KEY）或 staff 表里任一启用中的账号。
+    通过的请求挂 req.staff = { id, name, role, parent_id }，供 scopeOf 与留痕用。
     口令比较走常量时间；失败计入限速。 */
 function requireCounselor(req, res, next) {
   const ip = String(req.ip || req.socket?.remoteAddress || '?')
@@ -122,15 +129,21 @@ function requireCounselor(req, res, next) {
 
   if (presented && safeEqual(presented, want)) {
     authFails.delete(ip)
-    req.staff = { id: 'owner', name: '辅导员', role: 'owner' }
+    req.staff = { id: OWNER_ID, name: OWNER_NAME, role: 'owner', parent_id: null }
     return next()
   }
 
   if (presented) {
     const member = repo.getStaffByKey(presented)
-    if (member) {
+    // staff 表里那行 id='owner' 的隐藏配置不能当账号用（它的 access_key 从不下发）
+    if (member && member.role !== 'owner') {
       authFails.delete(ip)
-      req.staff = { id: member.id, name: member.name, role: member.role || 'assistant' }
+      req.staff = {
+        id: member.id,
+        name: member.name,
+        role: member.role || 'assistant',
+        parent_id: member.parent_id || null
+      }
       try {
         repo.updateStaff(member.id, { last_seen_at: nowIso() })
       } catch {}
@@ -142,10 +155,38 @@ function requireCounselor(req, res, next) {
   return fail(res, 401, 'UNAUTHORIZED', '访问密码不对，请重新输入。')
 }
 
-/** 只有主账号（辅导员本人）能进：设置、改密码、管理助理 */
+/** 数据可见范围：owner → null（全部）；counselor → 自己；assistant → 所属辅导员。
+    所有列表/看板/导入/导出都拿它过滤 students.owner_staff_id。 */
+export function scopeOf(req) {
+  const me = req?.staff
+  if (!me) return null
+  if (me.role === 'owner') return null
+  if (me.role === 'assistant') return me.parent_id || me.id
+  return me.id
+}
+
+/** 越权一律当「不存在」：只把调用者可见范围内的通知交出去，其余返回 null */
+function visibleNotice(req, id) {
+  const notice = repo.getNotice(id)
+  if (!notice) return null
+  const scope = scopeOf(req)
+  if (scope !== null && String(notice.owner_staff_id || '') !== String(scope)) return null
+  return notice
+}
+
+/** 账号管理权限：owner 只管 counselor；counselor 只管 parent_id = 自己的 assistant */
+function canManage(req, row) {
+  const me = req.staff
+  if (!row || row.role === 'owner') return false
+  if (me.role === 'owner') return row.role === 'counselor'
+  if (me.role === 'counselor') return row.role === 'assistant' && String(row.parent_id || '') === String(me.id)
+  return false
+}
+
+/** 只有总管能进：设置、改密码（账号管理另有更细的按角色权限） */
 function requireOwner(req, res, next) {
   if (req.staff?.role !== 'owner') {
-    return fail(res, 403, 'FORBIDDEN', '只有辅导员（主账号）能改这里，助理账号没有权限。')
+    return fail(res, 403, 'FORBIDDEN', '只有总管（owner）能改这里，辅导员与助理账号没有权限。')
   }
   next()
 }
@@ -215,6 +256,11 @@ function assertNoAnswer(payload) {
 }
 
 const str = (v) => (v === null || v === undefined ? '' : String(v))
+
+/** 花名册字段的确定性校验规则（/api/roster/check 用，不调模型） */
+const DEGREES = ['本科', '硕士', '博士']
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+const GRADE_RE = /^20\d{2}级$/
 
 /* =========================================================================
    语言视图：把 StructuredNotice + Translation 压成学生卡片要的字段
@@ -591,6 +637,10 @@ function fallbackQuizFromActions(structured) {
 export function createApiRouter() {
   const r = Router()
 
+  // 契约要求总管密码默认 12345678；settings.js 里还写着老的 123456 兜底，
+  // 所以先在这里落好默认值，再让它把 .env / 环境变量 / 数据库里配置灌回来（真实配置优先）。
+  if (!process.env.COUNSELOR_KEY) process.env.COUNSELOR_KEY = DEFAULT_OWNER_KEY
+
   // 界面里改过的配置（密码 / AI）会写进 settings 表，这里先灌回 env，再谈别的
   try {
     loadSettingsIntoEnv()
@@ -658,7 +708,9 @@ export function createApiRouter() {
   r.use('/me', requireCounselor)
   r.use('/settings', requireCounselor, requireOwner)
   r.use('/auth', requireCounselor, requireOwner)
-  r.use('/staff', requireCounselor, requireOwner)
+  // 账号管理按角色分级（owner 管 counselor，counselor 管自己的 assistant），
+  // 所以这里只做登录校验，具体权限在每个路由里判。
+  r.use('/staff', requireCounselor)
 
   /* ---------------- 设置：访问密码 / AI 配置（改完立即生效，不用重启） ---------------- */
 
@@ -759,80 +811,249 @@ export function createApiRouter() {
     })
   )
 
-  /* ---------------- 我是谁（前端据此决定能不能看到设置入口） ---------------- */
+  /* ---------------- 我是谁（前端据此决定能看到哪些入口） ---------------- */
+
+  /** 邮箱脱敏：zhangsan@example.com → z***@example.com（对外只给这个） */
+  const maskEmail = (addr) => {
+    const s = str(addr).trim()
+    const at = s.lastIndexOf('@')
+    if (at <= 0) return s ? '••••' : ''
+    return `${s.slice(0, 1)}***${s.slice(at)}`
+  }
+
+  /** staff 表里 id='owner' 的隐藏行：只存总管自己的发件邮箱，不参与账号列表 */
+  const ownerEmailRow = () => repo.getStaff(OWNER_ID)
+
+  /** 配邮箱时按需建这行；access_key 是随机串且从不下发，所以不能当账号登录 */
+  const ensureEmailRow = (staff) => {
+    if (staff.role !== 'owner') return repo.getStaff(staff.id)
+    const existed = ownerEmailRow()
+    if (existed) return existed
+    return repo.createStaff({
+      id: OWNER_ID,
+      name: OWNER_NAME,
+      role: 'owner',
+      access_key: randomBytes(24).toString('hex'),
+      parent_id: null
+    })
+  }
+
+  /** 发件邮箱视图：没绑定时什么都不透露 */
+  const emailView = (row) => {
+    const address = str(row?.email).trim()
+    const provider = str(row?.email_provider).trim().toLowerCase() || null
+    const bound =
+      Boolean(address) && (provider === 'log' || (provider === 'resend' && Boolean(row?.email_api_key)))
+    const from = str(row?.email_from).trim()
+    return {
+      bound,
+      address_masked: bound ? maskEmail(address) : '',
+      provider: bound ? provider : null,
+      from: from || (bound ? address : '')
+    }
+  }
 
   r.get(
     '/me',
     wrap((req, res) => {
+      const me = req.staff
+      const row = me.role === 'owner' ? ownerEmailRow() : repo.getStaff(me.id)
+      const mail = emailView(row)
       res.json({
-        id: req.staff.id,
-        name: req.staff.name,
-        role: req.staff.role,
-        is_owner: req.staff.role === 'owner'
+        id: me.id,
+        name: me.name,
+        role: me.role,
+        parent_id: me.parent_id || null,
+        // 调用者能创建哪种账号：owner → counselor，counselor → assistant，assistant → 无
+        can_create: me.role === 'owner' ? 'counselor' : me.role === 'counselor' ? 'assistant' : null,
+        email: { bound: mail.bound, address: mail.address_masked, provider: mail.provider },
+        is_owner: me.role === 'owner'
       })
     })
   )
 
-  /* ---------------- 助理账号（只有主账号能管） ---------------- */
+  /* ---------------- 账号管理：owner 管辅导员，辅导员管自己的助理 ---------------- */
 
   const newKey = () => randomBytes(6).toString('hex')
   const maskStaffKey = (k) => {
     const s = String(k || '')
     return s.length <= 6 ? '••••••' : `${s.slice(0, 3)}…${s.slice(-3)}`
   }
-  const staffView = (s) => ({
+
+  /** 账号对外视图：永远不含 access_key 明文与邮箱 API Key */
+  const memberView = (s, assistantCount = 0) => ({
     id: s.id,
     name: s.name,
     role: s.role,
     active: Number(s.active) === 1,
     created_at: s.created_at,
     last_seen_at: s.last_seen_at,
-    key_masked: maskStaffKey(s.access_key)
+    key_masked: maskStaffKey(s.access_key),
+    parent_id: s.parent_id || null,
+    assistant_count: Number(assistantCount) || 0
   })
 
   r.get(
     '/staff',
     wrap((req, res) => {
-      res.json({ owner: { name: '辅导员' }, staff: repo.listStaff().map(staffView) })
+      const me = req.staff
+      if (me.role === 'assistant') {
+        return fail(res, 403, 'FORBIDDEN', '助理账号没有账号管理权限。')
+      }
+      const all = repo.listStaff().filter((s) => s.role !== 'owner')
+      const members =
+        me.role === 'owner'
+          ? all.filter((s) => s.role === 'counselor')
+          : all.filter(
+              (s) => s.role === 'assistant' && String(s.parent_id || '') === String(me.id)
+            )
+      const views = members.map((s) =>
+        memberView(s, all.filter((x) => String(x.parent_id || '') === String(s.id)).length)
+      )
+      // members 是契约字段；staff 是旧前端的别名，避免老页面白屏
+      res.json({ members: views, staff: views, owner: { name: OWNER_NAME } })
     })
   )
 
   r.post(
     '/staff',
     wrap((req, res) => {
+      const me = req.staff
+      if (me.role === 'assistant') {
+        return fail(res, 403, 'FORBIDDEN', '助理账号不能创建账号。')
+      }
       const name = str(req.body?.name).trim()
-      if (!name) return fail(res, 400, 'INVALID_BODY', '给助理起个名字')
+      if (!name) return fail(res, 400, 'INVALID_BODY', '给账号起个名字')
       if (name.length > 24) return fail(res, 400, 'INVALID_BODY', '名字太长了')
+
+      // 角色由调用者决定：总管建辅导员（parent_id = NULL），辅导员建自己的助理
+      const role = me.role === 'owner' ? 'counselor' : 'assistant'
       const key = newKey()
-      const row = repo.createStaff({ name, access_key: key, role: 'assistant' })
-      console.log(`[staff] 新增助理 ${name}`)
-      res.json({ ok: true, staff: staffView(row), access_key: key })
+      const row = repo.createStaff({
+        name,
+        access_key: key,
+        role,
+        parent_id: role === 'assistant' ? me.id : null
+      })
+      console.log(`[staff] ${me.name} 创建了${role === 'counselor' ? '辅导员' : '助理'}「${name}」`)
+      // 明文 access_key 只在这里返回一次；staff 是旧前端的别名
+      const view = memberView(row, 0)
+      res.json({ ok: true, member: view, staff: view, access_key: key })
     })
   )
 
   r.patch(
     '/staff/:id',
     wrap((req, res) => {
+      const me = req.staff
       const row = repo.getStaff(req.params.id)
-      if (!row) return fail(res, 404, 'NOT_FOUND', '没有这个助理')
+      if (!row || row.role === 'owner') return fail(res, 404, 'NOT_FOUND', '没有这个账号')
+      if (!canManage(req, row)) {
+        return fail(res, 403, 'FORBIDDEN', '这个账号不在你的管理范围里。')
+      }
+
       const patch = {}
-      if (req.body?.name !== undefined) patch.name = str(req.body.name).trim() || row.name
-      if (req.body?.active !== undefined) patch.active = Boolean(req.body.active)
+      if (req.body?.name !== undefined) {
+        const name = str(req.body.name).trim()
+        if (!name) return fail(res, 400, 'INVALID_BODY', '名字不能为空')
+        if (name.length > 24) return fail(res, 400, 'INVALID_BODY', '名字太长了')
+        patch.name = name
+      }
+      if (req.body?.active !== undefined) {
+        const active = Boolean(req.body.active)
+        if (!active && String(row.id) === String(me.id)) {
+          return fail(res, 403, 'FORBIDDEN', '不能停用自己的账号。')
+        }
+        patch.active = active
+      }
       let accessKey = null
       if (req.body?.regenerate) {
         accessKey = newKey()
         patch.access_key = accessKey
       }
+
       const next = repo.updateStaff(row.id, patch)
-      res.json({ ok: true, staff: staffView(next), access_key: accessKey })
+      console.log(`[staff] ${me.name} 改动了账号「${row.name}」`)
+      const view = memberView(next, 0)
+      const out = { ok: true, member: view, staff: view } // staff 是旧前端的别名
+      if (accessKey) out.access_key = accessKey // 明文只在新生成时返回一次
+      res.json(out)
     })
   )
 
   r.delete(
     '/staff/:id',
     wrap((req, res) => {
-      repo.deleteStaff(req.params.id)
-      console.log(`[staff] 删除助理 ${req.params.id}`)
+      const me = req.staff
+      const row = repo.getStaff(req.params.id)
+      if (!row || row.role === 'owner') return fail(res, 404, 'NOT_FOUND', '没有这个账号')
+      if (!canManage(req, row)) {
+        return fail(res, 403, 'FORBIDDEN', '这个账号不在你的管理范围里。')
+      }
+      if (String(row.id) === String(me.id)) return fail(res, 403, 'FORBIDDEN', '不能删除自己的账号。')
+
+      const removed = repo.deleteStaff(row.id)
+      console.log(
+        `[staff] ${me.name} 删除了账号「${row.name}」，连带助理 ${removed?.assistants ?? 0} 个 / 学生 ${removed?.students ?? 0} 人回到未分配`
+      )
+      res.json({ ok: true, removed: removed || { assistants: 0, students: 0 } })
+    })
+  )
+
+  /* ---------------- 自己的发件邮箱 ---------------- */
+
+  r.get(
+    '/staff/me/email',
+    wrap((req, res) => {
+      const row = req.staff.role === 'owner' ? ownerEmailRow() : repo.getStaff(req.staff.id)
+      res.json(emailView(row))
+    })
+  )
+
+  r.put(
+    '/staff/me/email',
+    wrap((req, res) => {
+      const body = req.body || {}
+      const email = str(body.email).trim()
+      const provider = str(body.provider).trim().toLowerCase() || 'resend'
+      if (!EMAIL_RE.test(email)) {
+        return fail(res, 400, 'INVALID_BODY', '邮箱格式不对，例如 name@university.edu')
+      }
+      if (!['resend', 'log'].includes(provider)) {
+        return fail(res, 400, 'INVALID_BODY', 'provider 只能是 resend（真发）或 log（只写日志）')
+      }
+
+      const row = ensureEmailRow(req.staff)
+      if (!row) return fail(res, 500, 'INTERNAL', '账号配置行创建失败，请稍后重试')
+
+      const apiKeyRaw = str(body.api_key).trim()
+      const patch = { email, email_provider: provider }
+      if (body.from !== undefined) patch.email_from = str(body.from).trim() || null
+      // API Key 落库前加密；传空字符串表示「不改动已经存好的那把」
+      if (apiKeyRaw) patch.email_api_key = encryptSecret(apiKeyRaw)
+      if (provider === 'resend' && !patch.email_api_key && !row.email_api_key) {
+        return fail(res, 400, 'INVALID_BODY', 'provider=resend 需要 api_key（在 Resend 后台生成）')
+      }
+
+      repo.updateStaff(row.id, patch)
+      console.log(`[email] ${req.staff.name} 绑定发件邮箱 ${email}（provider=${provider}）`)
+      res.json({ ok: true, email: emailView(repo.getStaff(row.id)) })
+    })
+  )
+
+  r.delete(
+    '/staff/me/email',
+    wrap((req, res) => {
+      const row = req.staff.role === 'owner' ? ownerEmailRow() : repo.getStaff(req.staff.id)
+      if (row) {
+        repo.updateStaff(row.id, {
+          email: null,
+          email_from: null,
+          email_provider: null,
+          email_api_key: null
+        })
+      }
+      console.log(`[email] ${req.staff.name} 解绑了发件邮箱`)
       res.json({ ok: true })
     })
   )
@@ -875,20 +1096,30 @@ export function createApiRouter() {
         name_en: str(r?.name_en).trim() || null,
         lang: normalizeLangCode(r?.lang),
         class_no: str(r?.class_no).trim() || null,
-        cohort: str(r?.cohort).trim() || null
+        cohort: str(r?.cohort).trim() || null,
+        // v2 新增的花名册字段：缺了留 null，由 /roster/check 把缺口报出来，不在这里拦截
+        nationality: str(r?.nationality).trim() || null,
+        email: str(r?.email).trim() || null,
+        degree: str(r?.degree).trim() || null,
+        grade: str(r?.grade).trim() || null
       })
     }
     return { rows: out, bad, dup }
   }
 
-  const rosterSummary = () => ({
-    total: repo.countStudents(),
-    demo_count: repo.countDemoStudents()
-  })
+  /** 人数统计按 scope：总管看全部，辅导员/助理只看自己名下 */
+  const rosterSummary = (req) => {
+    const scope = scopeOf(req)
+    return {
+      total: repo.countStudents(scope),
+      demo_count: repo.countDemoStudents(scope)
+    }
+  }
 
   r.post(
     '/roster/import',
     wrap((req, res) => {
+      const scope = scopeOf(req)
       const mode = req.body?.mode === 'replace' ? 'replace' : 'append'
       const keepDemo = Boolean(req.body?.keep_demo)
       const { rows, bad, dup } = cleanRows(req.body?.rows)
@@ -896,34 +1127,48 @@ export function createApiRouter() {
 
       let removed = 0
       if (mode === 'replace') {
-        // 「保留示例」= 只清掉之前导入的真实学生，示例学生还留着
-        removed = keepDemo ? repo.deleteImportedStudents() : repo.deleteAllStudents()
+        // 「保留示例」= 只清掉之前导入的真实学生，示例学生还留着；清的范围永远不越界
+        removed = keepDemo ? repo.deleteImportedStudents(scope) : repo.deleteAllStudents(scope)
       }
 
-      const { added, updated, skipped } = repo.insertStudentsBulk(rows)
+      // 谁导入算谁的：owner 导入记 NULL（只有总管看得见），辅导员/助理记自己的 scope
+      const { added, updated, skipped } = repo.insertStudentsBulk(rows, scope)
       console.log(
-        `[roster] ${mode} 导入 ${rows.length} 条（新增 ${added} / 更新 ${updated} / 跳过 ${skipped + bad + dup}）`
+        `[roster] ${req.staff.name}（${req.staff.role}）${mode} 导入 ${rows.length} 条（新增 ${added} / 更新 ${updated} / 跳过 ${skipped + bad + dup} / 归属 ${scope ?? '未分配'}）`
       )
-      res.json({ ok: true, added, updated, skipped: skipped + bad + dup, removed, mode, ...rosterSummary() })
+      res.json({
+        ok: true,
+        added,
+        updated,
+        skipped: skipped + bad + dup,
+        removed,
+        mode,
+        ...rosterSummary(req)
+      })
     })
   )
 
   r.post(
     '/roster/clear',
     wrap((req, res) => {
+      const scope = scopeOf(req)
       const keepDemo = Boolean(req.body?.keep_demo)
-      const removed = keepDemo ? repo.deleteImportedStudents() : repo.deleteAllStudents()
-      console.log(`[roster] 清空名单，删掉 ${removed} 人（keepDemo=${keepDemo}）`)
-      res.json({ ok: true, removed, ...rosterSummary() })
+      const removed = keepDemo ? repo.deleteImportedStudents(scope) : repo.deleteAllStudents(scope)
+      console.log(`[roster] ${req.staff.name} 清空名单，删掉 ${removed} 人（keepDemo=${keepDemo}）`)
+      res.json({ ok: true, removed, ...rosterSummary(req) })
     })
   )
 
   r.post(
     '/roster/restore-demo',
     wrap((req, res) => {
+      // 示例学生一律 owner_staff_id = NULL，恢复动作只对总管有意义
+      if (req.staff.role !== 'owner') {
+        return fail(res, 403, 'FORBIDDEN', '示例名单只有总管能恢复。')
+      }
       const n = repo.insertDemoStudents(buildRoster())
       console.log(`[roster] 恢复示例学生 ${n} 人`)
-      res.json({ ok: true, added: n, ...rosterSummary() })
+      res.json({ ok: true, added: n, ...rosterSummary(req) })
     })
   )
 
@@ -1006,6 +1251,30 @@ export function createApiRouter() {
       const translations =
         body.translations && typeof body.translations === 'object' ? body.translations : {}
 
+      // 目标学生：省略 / null / [] 都表示「名下全部」；给了数组就必须逐个校验可见范围
+      const scope = scopeOf(req)
+      let targetIds = null
+      if (body.target_ids !== undefined && body.target_ids !== null) {
+        if (!Array.isArray(body.target_ids)) {
+          return fail(res, 400, 'INVALID_BODY', 'target_ids 必须是学号数组')
+        }
+        const wanted = [...new Set(body.target_ids.map((v) => str(v).trim()).filter(Boolean))]
+        if (wanted.length) {
+          const visible = new Set(repo.getStudentsByIds(wanted, scope).map((s) => String(s.student_id)))
+          const missing = wanted.filter((id) => !visible.has(id))
+          if (missing.length) {
+            // 越权当「不存在」：既不动库，也不透露这些学号在别人名下
+            return fail(
+              res,
+              400,
+              'OUT_OF_SCOPE',
+              `这些学号不在你的名单里，不能作为发送目标：${missing.slice(0, 8).join('、')}${missing.length > 8 ? ` 等 ${missing.length} 个` : ''}`
+            )
+          }
+          targetIds = wanted
+        }
+      }
+
       const notice = repo.createNotice({
         raw_text: rawText,
         structured,
@@ -1020,6 +1289,9 @@ export function createApiRouter() {
         published_at: status === 'published' ? now : null,
         // 谁发通知谁维护：没显式给 owner 就记当前登录的人（辅导员或某个助理）
         owner: str(body.owner) || req.staff?.name || null,
+        // 归属账号 = 可见范围，数据隔离靠它（owner 发的是 NULL，只有总管看得见）
+        owner_staff_id: scope,
+        target_ids: targetIds,
         sent_at: body.sent_at || null
       })
 
@@ -1027,21 +1299,23 @@ export function createApiRouter() {
         repo.addEvent(notice.id, null, 'publish', {
           owner: notice.owner,
           staff_id: req.staff?.id || null,
-          staff_name: req.staff?.name || null
+          staff_name: req.staff?.name || null,
+          target_ids: targetIds
         })
       }
 
       // 契约里「失败统一 4xx/5xx」，成功一律 200，避免前端/评委脚本按 200 判断时踩 201
-      res.json({ notice, counts: repo.counts(notice.id), quiz_source: quizSource })
+      res.json({ notice, counts: repo.counts(notice.id, scope), quiz_source: quizSource })
     })
   )
 
-  /** 列表 + 计数 */
+  /** 列表 + 计数（按 scope 过滤：辅导员只看自己名下的通知） */
   r.get(
     '/notices',
     wrap((req, res) => {
-      const notices = repo.listNotices().map((n) => {
-        const counts = repo.counts(n.id)
+      const scope = scopeOf(req)
+      const notices = repo.listNotices(scope).map((n) => {
+        const counts = repo.counts(n.id, scope)
         const tr = n.translations && typeof n.translations === 'object' ? n.translations : {}
         const langs = Object.keys(tr).filter((k) => tr[k])
         return {
@@ -1054,6 +1328,8 @@ export function createApiRouter() {
           deadline_at: n.deadline_at,
           kind: n.kind,
           owner: n.owner,
+          owner_staff_id: n.owner_staff_id || null,
+          target_ids: n.target_ids || null,
           risk_flags: n.risk_flags,
           one_line: str(n.structured?.one_line),
           counts,
@@ -1069,9 +1345,10 @@ export function createApiRouter() {
   r.get(
     '/notices/:id',
     wrap((req, res) => {
-      const notice = repo.getNotice(req.params.id)
+      const notice = visibleNotice(req, req.params.id)
       if (!notice) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知')
-      const counts = repo.counts(notice.id)
+      const scope = scopeOf(req)
+      const counts = repo.counts(notice.id, scope)
       const tr = notice.translations && typeof notice.translations === 'object' ? notice.translations : {}
       const langs = Object.keys(tr).filter((k) => tr[k])
       res.json({
@@ -1083,13 +1360,14 @@ export function createApiRouter() {
     })
   )
 
-  /** 改结构化字段 / 换状态 */
+  /** 改结构化字段 / 换状态 / 改目标学生 */
   r.patch(
     '/notices/:id',
     wrap((req, res) => {
-      const existing = repo.getNotice(req.params.id)
+      const existing = visibleNotice(req, req.params.id)
       if (!existing) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知')
       const body = req.body || {}
+      const scope = scopeOf(req)
       const patch = {}
 
       for (const k of ['status', 'owner', 'sent_at', 'title_zh', 'raw_text', 'kind']) {
@@ -1099,6 +1377,30 @@ export function createApiRouter() {
       if (body.published_at !== undefined) patch.published_at = body.published_at
       if (body.quiz !== undefined) patch.quiz = body.quiz
       if (body.risk_flags !== undefined) patch.risk_flags = body.risk_flags
+
+      // 目标学生：同样要逐个校验可见范围，越权 400
+      if (body.target_ids !== undefined) {
+        if (body.target_ids !== null && !Array.isArray(body.target_ids)) {
+          return fail(res, 400, 'INVALID_BODY', 'target_ids 必须是学号数组')
+        }
+        const wanted = [...new Set((body.target_ids || []).map((v) => str(v).trim()).filter(Boolean))]
+        if (wanted.length) {
+          const visible = new Set(repo.getStudentsByIds(wanted, scope).map((s) => String(s.student_id)))
+          const missing = wanted.filter((id) => !visible.has(id))
+          if (missing.length) {
+            return fail(
+              res,
+              400,
+              'OUT_OF_SCOPE',
+              `这些学号不在你的名单里，不能作为发送目标：${missing.slice(0, 8).join('、')}${missing.length > 8 ? ` 等 ${missing.length} 个` : ''}`
+            )
+          }
+          patch.target_ids = wanted
+        } else {
+          patch.target_ids = null // 清空 = 名下全部
+        }
+      }
+
       if (body.translations !== undefined) {
         patch.translations = {
           ...(existing.translations || {}),
@@ -1121,7 +1423,7 @@ export function createApiRouter() {
       }
 
       const notice = repo.updateNotice(existing.id, patch)
-      res.json({ notice, counts: repo.counts(notice.id) })
+      res.json({ notice, counts: repo.counts(notice.id, scope) })
     })
   )
 
@@ -1129,7 +1431,7 @@ export function createApiRouter() {
   r.delete(
     '/notices/:id',
     wrap((req, res) => {
-      const notice = repo.getNotice(req.params.id)
+      const notice = visibleNotice(req, req.params.id)
       if (!notice) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知，可能已经删过了')
       const removed = repo.deleteNotice(notice.id)
       console.log(
@@ -1143,7 +1445,7 @@ export function createApiRouter() {
   r.post(
     '/notices/:id/translate',
     wrap(async (req, res) => {
-      const notice = repo.getNotice(req.params.id)
+      const notice = visibleNotice(req, req.params.id)
       if (!notice) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知')
 
       const requested = Array.isArray(req.body?.langs) && req.body.langs.length ? req.body.langs : DEFAULT_LANGS
@@ -1242,15 +1544,17 @@ export function createApiRouter() {
     })
   )
 
-  /** 看板 */
+  /** 看板（只列目标学生，且不越出调用者的可见范围） */
   r.get(
     '/notices/:id/dashboard',
     wrap((req, res) => {
-      const notice = repo.getNotice(req.params.id)
+      const notice = visibleNotice(req, req.params.id)
       if (!notice) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知')
 
-      const counts = repo.counts(notice.id)
-      const rows = repo.rosterWithReceipts(notice.id)
+      const scope = scopeOf(req)
+      const counts = repo.counts(notice.id, scope)
+      const rows = repo.rosterWithReceipts(notice.id, scope)
+      const visibleIds = new Set(rows.map((row) => String(row.student_id)))
 
       // by_lang：按 roster 的语言统计已确认数（doc 里就是 {en:8,ru:6} 这种纯数字）
       const byLang = {}
@@ -1271,6 +1575,10 @@ export function createApiRouter() {
         name_en: row.name_en,
         lang: row.lang,
         class_no: row.class_no,
+        nationality: row.nationality,
+        email: row.email,
+        degree: row.degree,
+        grade: row.grade,
         status: row.status,
         first_seen_at: row.first_seen_at,
         confirmed_at: row.confirmed_at,
@@ -1299,6 +1607,7 @@ export function createApiRouter() {
         timeline[i][key] += 1
       }
       for (const rc of repo.listReceipts(notice.id)) {
+        if (!visibleIds.has(String(rc.student_id))) continue
         bump(rc.first_seen_at, 'seen')
         bump(rc.quiz_passed_at, 'quiz')
         bump(rc.confirmed_at, 'confirmed')
@@ -1334,8 +1643,9 @@ export function createApiRouter() {
   r.post(
     '/notices/:id/nudge',
     wrap(async (req, res) => {
-      const notice = repo.getNotice(req.params.id)
+      const notice = visibleNotice(req, req.params.id)
       if (!notice) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知')
+      const scope = scopeOf(req)
 
       const rawTier = req.body?.tier
       // 兼容前端的 'unconfirmed' 写法，统一到 'all'
@@ -1344,7 +1654,7 @@ export function createApiRouter() {
       const tone = ['gentle', 'firm', 'final', 'warm'].includes(req.body?.tone) ? req.body.tone : 'firm'
       const lang = str(req.body?.lang) || 'zh'
 
-      const rows = repo.rosterWithReceipts(notice.id)
+      const rows = repo.rosterWithReceipts(notice.id, scope)
       let targets
       if (tier === 'unread') {
         targets = rows.filter((row) => !row.first_seen_at && !row.confirmed_at && !row.help_at)
@@ -1406,7 +1716,7 @@ export function createApiRouter() {
         tone,
         lang,
         source,
-        counts: repo.counts(notice.id)
+        counts: repo.counts(notice.id, scope)
       })
     })
   )
@@ -1415,11 +1725,11 @@ export function createApiRouter() {
   r.get(
     '/notices/:id/export.csv',
     wrap((req, res) => {
-      const notice = repo.getNotice(req.params.id)
+      const notice = visibleNotice(req, req.params.id)
       if (!notice) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知')
 
       const STATUS_ZH = { confirmed: '已确认', help: '已求助', seen: '仅查看', unread: '未读' }
-      const rows = repo.rosterWithReceipts(notice.id)
+      const rows = repo.rosterWithReceipts(notice.id, scopeOf(req))
       const header = [
         '学号',
         '姓名',
@@ -1464,17 +1774,205 @@ export function createApiRouter() {
     })
   )
 
-  /** 名单 */
+  /* ---------------- 邮件通知：逐个学生发，失败收集不中断 ---------------- */
+
+  /** 发件头：给了显示名就拼成 "名字" <地址> */
+  const mailFrom = (row) => {
+    const address = str(row?.email).trim()
+    const name = str(row?.email_from).trim().replace(/[<>"]/g, '')
+    return name ? `"${name}" <${address}>` : address
+  }
+
+  const escapeHtml = (v) =>
+    str(v).replace(
+      /[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+    )
+
+  /** 一封信：该通知的结构化内容 + 这位学生自己的卡片链接 */
+  function buildMail(notice, student, link) {
+    const s = notice.structured || {}
+    const title = str(notice.title_zh) || str(s.title_zh) || '通知'
+    const who = str(student.name || student.name_en || student.student_id)
+    const actions = Array.isArray(s.actions) ? s.actions : []
+    const materials = Array.isArray(s.materials) ? s.materials : []
+
+    const lines = [`你好 ${who}：`, '', `这是一条需要你处理的通知：${title}`]
+    if (str(s.one_line)) lines.push(`要点：${str(s.one_line)}`)
+    if (str(s.what)) lines.push(`说明：${str(s.what)}`)
+    if (str(s?.deadline?.raw)) lines.push(`截止：${str(s.deadline.raw)}`)
+    if (str(s?.place?.raw)) lines.push(`地点：${str(s.place.raw)}`)
+    if (actions.length) {
+      lines.push('', '要做的步骤：')
+      actions.forEach((a, i) => lines.push(`${i + 1}. ${str(a.zh || a.text)}`))
+    }
+    if (materials.length) {
+      lines.push('', '需要带的材料：')
+      for (const m of materials) lines.push(`- ${str(m)}`)
+    }
+    if (str(s.consequence)) lines.push('', `注意：${str(s.consequence)}`)
+    lines.push('', `点开卡片查看并确认（30 秒）：${link}`, '', '—— 最后一公里 LastMile')
+
+    const text = lines.join('\n')
+    const html = `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.7;color:#1f2328">${escapeHtml(
+      text
+    )
+      .replace(escapeHtml(link), `<a href="${escapeHtml(link)}">${escapeHtml(link)}</a>`)
+      .replace(/\n/g, '<br>')}</div>`
+
+    return { subject: `【LastMile】${title}`, text, html }
+  }
+
+  r.post(
+    '/notices/:id/email',
+    wrap(async (req, res) => {
+      const notice = visibleNotice(req, req.params.id)
+      if (!notice) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知')
+
+      const me = req.staff
+      const row = me.role === 'owner' ? ownerEmailRow() : repo.getStaff(me.id)
+      const mail = emailView(row)
+      if (!mail.bound) {
+        return fail(
+          res,
+          400,
+          'EMAIL_NOT_BOUND',
+          '还没有绑定发件邮箱：先在「我的邮箱」里填发件地址与邮件通道（resend 需要 API Key）'
+        )
+      }
+      const provider = mail.provider
+      const apiKey = provider === 'resend' ? decryptSecret(row?.email_api_key) : null
+      if (provider === 'resend' && !apiKey) {
+        return fail(
+          res,
+          400,
+          'EMAIL_NOT_BOUND',
+          '邮箱 API Key 解密失败（SECRET_KEY 换过？），请在后台重新填写'
+        )
+      }
+
+      const scope = scopeOf(req)
+      const from = mailFrom(row)
+      const link = `${publicBase(req)}/#/s/${notice.id}`
+      // 收件人 = 这份通知的目标学生（target_ids 为空则名下全部）里有邮箱的人
+      const rows = repo.rosterWithReceipts(notice.id, scope)
+
+      let sent = 0
+      let failed = 0
+      let skipped = 0
+      const errors = []
+      const seen = new Set()
+
+      for (const student of rows) {
+        const to = str(student.email).trim()
+        if (!to) {
+          skipped++ // 目标学生但没填邮箱
+          continue
+        }
+        const dedupe = to.toLowerCase()
+        if (seen.has(dedupe)) {
+          skipped++ // 同一个邮箱只发一封（/roster/check 会提示重复）
+          continue
+        }
+        seen.add(dedupe)
+
+        try {
+          await sendMail({ provider, apiKey, from, to, ...buildMail(notice, student, link) })
+          sent++
+        } catch (e) {
+          // 单人失败只记下来，继续发下一个
+          failed++
+          const reason = str(e?.message || e).slice(0, 300)
+          errors.push({ student_id: student.student_id, reason })
+          console.error(`[email] 发给 ${student.student_id} 失败：`, reason)
+        }
+      }
+
+      repo.addEvent(notice.id, null, 'email', {
+        provider,
+        sent,
+        failed,
+        skipped,
+        staff_id: me.id,
+        staff_name: me.name
+      })
+      console.log(
+        `[email] ${notice.id} ▸ provider=${provider} 成功 ${sent} / 失败 ${failed} / 跳过 ${skipped}（${me.name}）`
+      )
+      res.json({ ok: failed === 0, provider, sent, failed, skipped, errors })
+    })
+  )
+
+  /** 名单（v2：关键词 / 学历 / 年级 / 语言 / 班级 过滤，永远只在自己可见范围内） */
   r.get(
     '/roster',
     wrap((req, res) => {
-      const students = repo.listStudents()
+      const scope = scopeOf(req)
+      const students = repo.listStudents({
+        scope,
+        q: req.query.q,
+        degree: req.query.degree,
+        grade: req.query.grade,
+        lang: req.query.lang,
+        class_no: req.query.class_no
+      })
       res.json({
-        roster: students,
+        roster: students, // 旧前端的别名，别让老页面白屏
         students,
         total: students.length,
-        demo_count: repo.countDemoStudents()
+        demo_count: repo.countDemoStudents(scope)
       })
+    })
+  )
+
+  /** 花名册体检：纯确定性规则（不调模型），把发邮件前必须补齐的字段缺口列出来 */
+  r.post(
+    '/roster/check',
+    wrap((req, res) => {
+      const scope = scopeOf(req)
+      const students = repo.listStudents({ scope })
+      const hints = []
+
+      const emailCount = new Map()
+      for (const s of students) {
+        const email = str(s.email).trim().toLowerCase()
+        if (email) emailCount.set(email, (emailCount.get(email) || 0) + 1)
+      }
+
+      for (const s of students) {
+        const who = str(s.name || s.name_en || s.student_id)
+        const push = (field, level, message) =>
+          hints.push({
+            student_id: s.student_id,
+            name: str(s.name || s.name_en),
+            field,
+            level,
+            message
+          })
+
+        const email = str(s.email).trim()
+        if (!email) push('email', 'warn', `${who} 的邮箱缺失，没法给他发邮件通知`)
+        else if (!EMAIL_RE.test(email)) push('email', 'warn', `${who} 的邮箱格式不对：${email}`)
+        else if ((emailCount.get(email.toLowerCase()) || 0) > 1) {
+          push('email', 'warn', `${who} 的邮箱 ${email} 和别的同学重复，通知可能发错人`)
+        }
+
+        const degree = str(s.degree).trim()
+        if (!degree) push('degree', 'warn', `${who} 的学历信息缺失`)
+        else if (!DEGREES.includes(degree)) {
+          push('degree', 'warn', `${who} 的学历「${degree}」不在 本科/硕士/博士 里`)
+        }
+
+        const grade = str(s.grade).trim()
+        if (!grade) push('grade', 'warn', `${who} 的年级信息缺失`)
+        else if (!GRADE_RE.test(grade)) {
+          push('grade', 'warn', `${who} 的年级「${grade}」不是 20xx级 的形式`)
+        }
+
+        if (!str(s.nationality).trim()) push('nationality', 'info', `${who} 的国籍信息缺失`)
+      }
+
+      res.json({ hints, scanned: students.length })
     })
   )
 
@@ -1576,7 +2074,7 @@ export function createApiRouter() {
         my_status: statusOf(receipt),
         // ui-spec §4 的状态机有 quiz_passed 这一档，my_status 仍保持 api.md 的 4 态
         quiz_passed: Boolean(receipt?.quiz_passed_at),
-        counts: repo.counts(notice.id),
+        counts: repo.counts(notice.id, notice.owner_staff_id || null),
         status: notice.status,
         student: student
           ? { student_id: student.student_id, name: student.name, name_en: student.name_en, lang: student.lang }
@@ -1607,7 +2105,7 @@ export function createApiRouter() {
           ok: true,
           anonymous: true,
           my_status: 'unread',
-          counts: repo.counts(notice.id)
+          counts: repo.counts(notice.id, notice.owner_staff_id || null)
         })
       }
 
@@ -1623,7 +2121,7 @@ export function createApiRouter() {
         ok: true,
         receipt,
         my_status: statusOf(receipt),
-        counts: repo.counts(notice.id)
+        counts: repo.counts(notice.id, notice.owner_staff_id || null)
       })
     })
   )
@@ -1667,7 +2165,7 @@ export function createApiRouter() {
         source_span: str(quiz.source_span),
         explain: str(quiz.explain),
         attempts: repo.quizAttemptCount(notice.id, studentId || null),
-        counts: repo.counts(notice.id)
+        counts: repo.counts(notice.id, notice.owner_staff_id || null)
       })
     })
   )
@@ -1712,7 +2210,7 @@ export function createApiRouter() {
         message: kind === 'help' ? patch.help_message : null
       })
 
-      const counts = repo.counts(notice.id)
+      const counts = repo.counts(notice.id, notice.owner_staff_id || null)
       res.json({
         ok: true,
         receipt,

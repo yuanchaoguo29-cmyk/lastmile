@@ -1,19 +1,36 @@
 /* 确认 tab：AI 抽出来的每个字段都能改，每个字段下面都挂着原文片段（↵）。
    这是「AI 不是黑箱」的视觉：老师说得出这句话是从通知里哪一段来的。 */
 
-import React from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { getRoster } from '../lib/api.js'
 import {
   KIND_LABEL,
   LANG_LABEL,
   NOTICE_STATUS,
   RISK_LABEL,
+  errText,
   fmtDateTime,
   fromLocalInput,
   groupMessage,
   leftText,
   toLocalInput
 } from './helpers.js'
-import { Btn, Card, CopyBtn, Eyebrow, LangTag, QrBox } from './ui.jsx'
+import { Btn, Card, CopyBtn, ErrBar, Eyebrow, LangTag, QrBox } from './ui.jsx'
+import TargetPicker from './TargetPicker.jsx'
+
+/* 目标学生：存两份，form.target 给这个页面用，form.target_ids 给发布接口用。
+   mode='all' 时 target_ids 传 null（服务端把 null / 省略当成「名下全部」）。 */
+function readTarget(form) {
+  const t = form && form.target && typeof form.target === 'object' ? form.target : null
+  const mode = t && (t.mode === 'filter' || t.mode === 'pick') ? t.mode : 'all'
+  const ids = []
+  const raw = t && Array.isArray(t.ids) ? t.ids : []
+  raw.forEach((id) => {
+    const v = typeof id === 'string' ? id.trim() : ''
+    if (v && ids.indexOf(v) === -1) ids.push(v)
+  })
+  return { mode, ids: mode === 'all' ? [] : ids }
+}
 
 function spanText(v) {
   if (!v) return ''
@@ -267,6 +284,51 @@ export default function ConfirmTab({
   const transLangs = translations && typeof translations === 'object' ? Object.keys(translations) : []
   const roster = Number(counts && counts.roster) || 0
 
+  /* 目标学生：默认「全部」，ids 为空 = 不限制 */
+  const target = useMemo(() => readTarget(form), [form])
+  const targetEmpty = target.mode !== 'all' && target.ids.length === 0
+
+  /* 「发给谁」要真实的名单来选：进来读一次，失败就退化成「全部」，不挡发布 */
+  const [rosterRows, setRosterRows] = useState([])
+  const [rosterErr, setRosterErr] = useState('')
+  const [rosterLoading, setRosterLoading] = useState(false)
+  const rosterSeq = useRef(0)
+
+  async function loadRosterForTarget() {
+    const my = ++rosterSeq.current
+    setRosterLoading(true)
+    setRosterErr('')
+    try {
+      const data = await getRoster()
+      if (my !== rosterSeq.current) return
+      const list = Array.isArray(data && data.students)
+        ? data.students
+        : Array.isArray(data && data.roster)
+          ? data.roster
+          : []
+      setRosterRows(list.filter((s) => s && String(s.student_id || '').trim()))
+    } catch (e) {
+      if (my !== rosterSeq.current) return
+      setRosterRows([])
+      setRosterErr('读花名册失败：' + errText(e) + '。先按「全部」发也行，或者点重试。')
+    } finally {
+      if (my === rosterSeq.current) setRosterLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadRosterForTarget()
+    return () => {
+      rosterSeq.current += 1
+    }
+  }, [])
+
+  function onTargetChange(next) {
+    const mode = next && (next.mode === 'filter' || next.mode === 'pick') ? next.mode : 'all'
+    const ids = mode === 'all' ? [] : Array.isArray(next && next.ids) ? next.ids.slice() : []
+    onChange({ ...form, target: { mode, ids }, target_ids: mode === 'all' ? null : ids })
+  }
+
   const set = (patch) => onChange({ ...form, ...patch })
   const setDeadline = (patch) => onChange({ ...form, deadline: { ...form.deadline, ...patch } })
   const setPlace = (patch) => onChange({ ...form, place: { ...form.place, ...patch } })
@@ -420,7 +482,13 @@ export default function ConfirmTab({
             </div>
             <div className="lm-counselor-kv">
               <span className="lm-counselor-kv-k">名单</span>
-              <span className="lm-counselor-kv-v">{roster ? `${roster} 人` : '—'}</span>
+              <span className="lm-counselor-kv-v">
+                {target.mode === 'all'
+                  ? roster
+                    ? `${roster} 人（全部）`
+                    : '全部'
+                  : `${target.ids.length} 人 · 已选`}
+              </span>
             </div>
             {rawText ? (
               <details className="lm-counselor-raw">
@@ -475,11 +543,40 @@ export default function ConfirmTab({
         </aside>
       </div>
 
+      {/* 发给谁：发布前最后一道范围确认。链接不变，变的是「谁收到」。 */}
+      <section className="lm-counselor-targetbox" aria-label="发给谁">
+        <div className="lm-counselor-targetbox-head">
+          <div className="lm-counselor-targetbox-headtext">
+            <Eyebrow>TARGET · 发给谁</Eyebrow>
+            <p className="lm-counselor-targetbox-sub">
+              看板的名单、催办、导出邮件都只按这里选中的人算；学生链接和群发文案不变。
+            </p>
+          </div>
+          {rosterLoading ? <span className="lm-counselor-targetbox-sub">读名单…</span> : null}
+        </div>
+
+        {rosterErr ? <ErrBar message={rosterErr} onRetry={loadRosterForTarget} retryLabel="重试" /> : null}
+
+        <TargetPicker
+          value={target}
+          onChange={onTargetChange}
+          roster={rosterRows}
+          disabled={Boolean(busy)}
+        />
+      </section>
+
       <div className="lm-counselor-confirm-foot">
         <div className="lm-counselor-foot-text">
           {err ? <span className="lm-counselor-foot-err">{err}</span> : null}
-          {!err && note ? <span className="lm-counselor-foot-note">{note}</span> : null}
-          {!err && !note ? (
+          {!err && targetEmpty ? (
+            <span className="lm-counselor-foot-err">
+              还没选人：切回「全部」，或者至少勾一个人，才能发布。
+            </span>
+          ) : null}
+          {!err && !targetEmpty && note ? (
+            <span className="lm-counselor-foot-note">{note}</span>
+          ) : null}
+          {!err && !targetEmpty && !note ? (
             <span className="lm-counselor-foot-note">
               核完点右边发布：链接 + 二维码 + 群发文案会一起出来。
             </span>
@@ -489,7 +586,7 @@ export default function ConfirmTab({
           <Btn size="md" onClick={onSaveDraft} disabled={!!busy}>
             {busy === 'draft' ? '保存中…' : '保存草稿'}
           </Btn>
-          <Btn variant="primary" size="lg" onClick={onPublish} disabled={!!busy}>
+          <Btn variant="primary" size="lg" onClick={onPublish} disabled={!!busy || targetEmpty}>
             {busy === 'publish' ? '发布中…' : '确认并发布'}
           </Btn>
         </div>

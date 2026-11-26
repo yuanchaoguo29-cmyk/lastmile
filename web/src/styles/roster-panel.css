@@ -802,3 +802,277 @@
     padding-left: 12px;
   }
 }
+
+/* ---------- 14. v2：五个数字 / 名单体检 / 名单明细 ---------- */
+
+/* 表宽了（7 列），面板跟着放宽；原规则保留，这里只做覆盖 */
+.lm-roster-panel {
+  max-width: 980px;
+}
+
+.lm-roster-stats.is-five {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+.lm-roster-stats.is-five .lm-roster-stat {
+  padding-left: 0;
+  border-left: none;
+}
+
+.lm-roster-stats.is-five .lm-roster-stat + .lm-roster-stat {
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+
+.lm-roster-stats.is-five .lm-roster-stat-num {
+  font-size: 28px;
+}
+
+.lm-roster-stats.is-five .lm-roster-stat-num.is-total {
+  font-size: 32px;
+}
+
+.lm-roster-stat-num.is-email {
+  color: var(--blue);
+}
+
+.lm-roster-stat-num.is-hint {
+  color: var(--muted);
+}
+
+.lm-roster-stat-num.is-hint.is-bad {
+  color: var(--amber);
+}
+
+.lm-roster-hint.is-ok {
+  color: var(--mint);
+}
+
+/* ---------- 15. 检查名单 ---------- */
+
+.lm-roster-checkrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.lm-roster-checkrow-note {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+/* ---------- 16. 提示列表（只提示，不改数据） ---------- */
+
+.lm-roster-hints {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--navy-700);
+  overflow: hidden;
+}
+
+.lm-roster-hints-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(11, 18, 32, 0.6);
+}
+
+.lm-roster-hints-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.lm-roster-hints-sub {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.lm-roster-hints-head .lm-roster-textbtn {
+  margin-left: auto;
+}
+
+.lm-roster-hintlist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lm-roster-hintrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(34, 48, 74, 0.55);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.lm-roster-hintrow:last-child {
+  border-bottom: none;
+}
+
+.lm-roster-hintrow-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.lm-roster-hintrow.is-warn .lm-roster-hintrow-dot {
+  background: var(--amber);
+}
+
+.lm-roster-hintrow-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+  color: var(--muted);
+}
+
+.lm-roster-hintrow.is-warn .lm-roster-hintrow-text {
+  color: var(--amber);
+}
+
+.lm-roster-hintrow.is-info .lm-roster-hintrow-text {
+  color: var(--muted);
+}
+
+.lm-roster-hintrow-meta {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.lm-roster-hintrow-ignore {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.lm-roster-hintrow-ignore:hover {
+  color: var(--ink);
+  border-color: rgba(143, 163, 191, 0.5);
+}
+
+.lm-roster-hints-more {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--line);
+  color: var(--mint);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.lm-roster-hints-more:hover {
+  background: rgba(61, 220, 151, 0.06);
+}
+
+/* ---------- 17. 名单明细表 ---------- */
+
+.lm-roster-tablewrap.is-roster {
+  margin-top: 14px;
+}
+
+.lm-roster-table.is-roster {
+  min-width: 760px;
+}
+
+.lm-roster-table.is-preview {
+  min-width: 720px;
+}
+
+.lm-roster-td-name {
+  max-width: 190px;
+}
+
+.lm-roster-name-en {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.lm-roster-td-email {
+  max-width: 220px;
+}
+
+.lm-roster-email {
+  display: inline-block;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.lm-roster-table.is-roster .lm-roster-lang-code,
+.lm-roster-table.is-preview .lm-roster-lang-code {
+  margin-left: 6px;
+}
+
+.lm-roster-badge.is-demo {
+  color: var(--blue);
+  border: 1px solid rgba(91, 157, 255, 0.45);
+  background: rgba(91, 157, 255, 0.1);
+}
+
+/* ---------- 18. 窄屏：五个数字折成两列 ---------- */
+
+@media (max-width: 720px) {
+  .lm-roster-stats.is-five {
+    grid-template-columns: repeat(2, 1fr);
+    row-gap: 14px;
+  }
+
+  .lm-roster-stats.is-five .lm-roster-stat:nth-child(even) {
+    padding-left: 14px;
+    border-left: 1px solid var(--line);
+  }
+
+  .lm-roster-stats.is-five .lm-roster-stat:nth-child(odd) {
+    padding-left: 0;
+    border-left: none;
+  }
+
+  .lm-roster-hintrow {
+    flex-wrap: wrap;
+  }
+
+  .lm-roster-hintrow-ignore {
+    margin-left: auto;
+  }
+}
+

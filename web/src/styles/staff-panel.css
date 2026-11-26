@@ -456,3 +456,157 @@
     animation: none;
   }
 }
+
+/* ---------- 8. owner 视角：辅导员行上的「助理 N 人」 ---------- */
+
+.lm-staff-sub {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1.7;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+/* role 还没读到 / 读失败时的占位段：外壳沿用设置面板的卡片 */
+.lm-staff-norole .lm-counselor-skel {
+  margin-top: 12px;
+}
+
+/* ---------- 9. 发件邮箱段（SENDER · 所有人的段） ----------
+   卡片底子复用 .lm-counselor-set-sec，这里只补「当前绑定」和通道两处。 */
+
+.lm-sender :focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+
+.lm-sender-cur {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  background: rgba(7, 13, 23, 0.45);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.lm-sender-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.lm-sender-dot.is-on {
+  background: var(--mint);
+  box-shadow: 0 0 6px rgba(61, 220, 151, 0.7);
+}
+
+.lm-sender-addr {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.lm-sender-addr.is-dim {
+  font-family: var(--font-sans);
+  color: var(--muted);
+}
+
+/* 通道二选一：按钮形态，键盘可 Tab，读屏当 radio */
+.lm-sender-opts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lm-sender-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 9px 11px;
+  background: var(--navy-900);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.lm-sender-opt:hover {
+  border-color: rgba(143, 163, 191, 0.42);
+}
+
+.lm-sender-opt.is-on {
+  border-color: var(--mint);
+  background: rgba(61, 220, 151, 0.08);
+}
+
+.lm-sender-opt:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.lm-sender-opt-k {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
+.lm-sender-opt.is-on .lm-sender-opt-k {
+  color: var(--mint);
+}
+
+.lm-sender-opt-n {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.lm-sender-loaderr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.lm-sender-loaderr .lm-counselor-set-msg {
+  flex: 1 1 200px;
+  margin: 0;
+}
+
+/* 「清除」是个破坏性动作，但只清自己绑的邮箱，别用满红按钮 */
+.lm-counselor-set-actions .lm-sender-clear {
+  color: var(--red);
+  border-color: rgba(255, 107, 107, 0.38);
+}
+
+.lm-counselor-set-actions .lm-sender-clear:hover {
+  color: var(--navy-900);
+  background: var(--red);
+  border-color: var(--red);
+}
+
+@media (max-width: 480px) {
+  .lm-sender-opts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
