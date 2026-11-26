@@ -16,6 +16,7 @@ import {
   toLocalInput
 } from './helpers.js'
 import { Btn, Card, CopyBtn, ErrBar, Eyebrow, LangTag, QrBox } from './ui.jsx'
+import MailDialog from './MailDialog.jsx'
 import TargetPicker from './TargetPicker.jsx'
 
 /* 目标学生：存两份，form.target 给这个页面用，form.target_ids 给发布接口用。
@@ -599,6 +600,13 @@ export default function ConfirmTab({
 export function PublishedPanel({ form, noticeId, rawLink, qrDataUrl }) {
   const link = rawLink
   const msg = groupMessage(form, link)
+
+  /* 一键发邮件：默认收件人 = 这份通知的目标学生；mode='all' 时是空数组，
+     弹窗会把"有邮箱的人"全选上（一份发给全员的名单，默认就是全体）。 */
+  const [mailOpen, setMailOpen] = useState(false)
+  const target = useMemo(() => readTarget(form), [form])
+  const targetIds = useMemo(() => (target.mode === 'all' ? [] : target.ids), [target])
+
   return (
     <div className="lm-counselor-pub">
       <div className="lm-counselor-pub-head">
@@ -633,7 +641,12 @@ export function PublishedPanel({ form, noticeId, rawLink, qrDataUrl }) {
           <div className="lm-counselor-msgwrap">
             <div className="lm-counselor-msgwrap-head">
               <Eyebrow>GROUP MESSAGE · 复制到班级群</Eyebrow>
-              <CopyBtn text={msg} label="复制群发文案" size="sm" />
+              <div className="lm-mail-launch">
+                <CopyBtn text={msg} label="复制群发文案" size="sm" />
+                <Btn size="sm" onClick={() => setMailOpen(true)}>
+                  发送邮件
+                </Btn>
+              </div>
             </div>
             <textarea className="lm-counselor-msgbox" readOnly rows={10} value={msg} />
           </div>
@@ -649,6 +662,14 @@ export function PublishedPanel({ form, noticeId, rawLink, qrDataUrl }) {
           </div>
         </div>
       </div>
+
+      <MailDialog
+        open={mailOpen}
+        noticeId={noticeId}
+        defaultIds={targetIds}
+        hint="发给这份通知的目标学生：只有填了邮箱的人能勾。发完不刷新本页，回执还是回看板。"
+        onClose={() => setMailOpen(false)}
+      />
     </div>
   )
 }

@@ -4,6 +4,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { buildNudge } from '../lib/api.js'
 import { errText, isAuthError, studentLink } from './helpers.js'
+import MailDialog from './MailDialog.jsx'
 import {
   Btn,
   Card,
@@ -43,6 +44,8 @@ export default function NudgeTab({ id, published, token, seed, onAuthError, onGo
   const [err, setErr] = useState('')
   const [result, setResult] = useState(null)
   const [showAll, setShowAll] = useState(false)
+  /* 催办文案 → 直接邮件发出去：收件人默认就是这一档的目标学生 */
+  const [mailOpen, setMailOpen] = useState(false)
 
   /* 从看板点「催」跳过来时，直接把范围选好 */
   useEffect(() => {
@@ -64,6 +67,10 @@ export default function NudgeTab({ id, published, token, seed, onAuthError, onGo
     [result]
   )
   const listed = showAll ? targets : targets.slice(0, 10)
+  const nudgeIds = useMemo(
+    () => targets.map((t) => String((t && t.student_id) || '').trim()).filter(Boolean),
+    [targets]
+  )
 
   async function generate() {
     if (!tier || !published) return
@@ -73,6 +80,7 @@ export default function NudgeTab({ id, published, token, seed, onAuthError, onGo
       const res = await buildNudge(id, { tier, tone, lang })
       setResult(res && typeof res === 'object' ? res : { text: '', targets: [] })
       setShowAll(false)
+      setMailOpen(false)
     } catch (e) {
       if (isAuthError(e)) onAuthError(errText(e))
       setErr(errText(e))
@@ -180,7 +188,14 @@ export default function NudgeTab({ id, published, token, seed, onAuthError, onGo
             <Card
               label={`NUDGE · ${tierMeta ? tierMeta.label : ''} · ${toneMeta.label} · ${langMeta.label}`}
               title="这段可以直接粘到群里"
-              actions={<CopyBtn text={result.text} label="复制文案" variant="primary" size="md" />}
+              actions={
+                <div className="lm-mail-launch">
+                  <CopyBtn text={result.text} label="复制文案" variant="primary" size="md" />
+                  <Btn size="md" onClick={() => setMailOpen(true)}>
+                    邮件发出去
+                  </Btn>
+                </div>
+              }
             >
               <textarea
                 className="lm-counselor-nudge-text"
@@ -245,6 +260,14 @@ export default function NudgeTab({ id, published, token, seed, onAuthError, onGo
           />
         )}
       </div>
+
+      <MailDialog
+        open={mailOpen}
+        noticeId={id}
+        defaultIds={nudgeIds}
+        hint="发给这一档催办名单里的人：只有填了邮箱的人能勾。发完不刷新本页，回执还是回看板。"
+        onClose={() => setMailOpen(false)}
+      />
     </div>
   )
 }

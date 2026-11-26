@@ -9,6 +9,7 @@ import './styles/roster-panel.css'
 import './styles/target-picker.css'
 import './styles/staff-panel.css'
 import './styles/account-panel.css'
+import './styles/mail-dialog.css'
 import CounselorApp from './counselor/CounselorApp.jsx'
 import StudentApp from './student/StudentApp.jsx'
 

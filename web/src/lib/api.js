@@ -144,6 +144,16 @@ export const getDashboard = (id) => req(`/api/notices/${id}/dashboard`, { counse
 export const buildNudge = (id, payload) =>
   req(`/api/notices/${id}/nudge`, { method: 'POST', body: payload, counselor: true })
 
+/** 一键发邮件：逐人发，失败的收在 errors 里不影响其他人。
+    student_ids 给数组就只发这些（服务端校验「通知目标 ∩ 可见范围」，越权 400 OUT_OF_SCOPE）；
+    不给就发给这份通知的全部目标学生。发件邮箱取当前账号绑定的那个，没绑 → 400 EMAIL_NOT_BOUND。 */
+export const sendNoticeEmail = (noticeId, student_ids) =>
+  req(`/api/notices/${encodeURIComponent(noticeId)}/email`, {
+    method: 'POST',
+    body: { student_ids },
+    counselor: true
+  })
+
 /** 导出回执 CSV：和别的辅导员接口一样用请求头带账号 + 密码（x-counselor-user / x-counselor-key），
     密码不再进 URL。拿到文本后在本机拼 Blob + objectURL 触发下载，文件名「回执-<通知id>.csv」。
     失败沿用 req() 的形态：抛出的 err 带 status / code，页面可以把 404 翻成「这份通知不在你名下」。 */

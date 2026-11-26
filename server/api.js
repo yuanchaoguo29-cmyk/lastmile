@@ -2165,6 +2165,7 @@ export function createApiRouter() {
       const notice = visibleNotice(req, req.params.id)
       if (!notice) return fail(res, 404, 'NOTICE_NOT_FOUND', '没有这份通知')
 
+      const body = req.body || {}
       const me = req.staff
       const row = me.role === 'owner' ? ownerEmailRow() : repo.getStaff(me.id)
       const mail = emailView(row)
@@ -2204,8 +2205,41 @@ export function createApiRouter() {
       const scope = scopeOf(req)
       const from = mailFrom(row)
       const link = `${publicBase(req)}/#/s/${notice.id}`
-      // 收件人 = 这份通知的目标学生（target_ids 为空则名下全部）里有邮箱的人
-      const rows = repo.rosterWithReceipts(notice.id, scope)
+      // 收件人池 = 这份通知的目标学生（target_ids 为空则名下全部）里、调用者可见的人
+      const targetRows = repo.rosterWithReceipts(notice.id, scope)
+
+      /* 可选收件人：给了 student_ids 就只发这些，且必须落在「该通知目标 ∩ 调用者可见范围」内；
+         不给（undefined / null）才是原来的行为——发给这份通知的全部目标学生。
+         只给数组不给「范围内校验」等于把越权发信的口子留给前端，所以这里逐个比对收件人池。 */
+      let wantedIds = null
+      if (body.student_ids !== undefined && body.student_ids !== null) {
+        if (!Array.isArray(body.student_ids)) {
+          return fail(res, 400, 'INVALID_BODY', 'student_ids 必须是学号数组')
+        }
+        const wanted = [...new Set(body.student_ids.map((v) => str(v).trim()).filter(Boolean))]
+        if (!wanted.length) {
+          return fail(
+            res,
+            400,
+            'INVALID_BODY',
+            'student_ids 是空数组：一个收件人都没选。不传这个字段才是发给全部目标学生'
+          )
+        }
+        const inTarget = new Set(targetRows.map((s) => String(s.student_id)))
+        const outside = wanted.filter((id) => !inTarget.has(id))
+        if (outside.length) {
+          // 越权当「不在目标里」：不透露这些学号在别人名下
+          return fail(
+            res,
+            400,
+            'OUT_OF_SCOPE',
+            `这些学号不在这份通知的目标学生里，不能作为收件人：${outside.slice(0, 8).join('、')}${outside.length > 8 ? ` 等 ${outside.length} 个` : ''}`
+          )
+        }
+        wantedIds = wanted
+      }
+      const wantedSet = wantedIds ? new Set(wantedIds) : null
+      const rows = wantedSet ? targetRows.filter((s) => wantedSet.has(String(s.student_id))) : targetRows
 
       let sent = 0
       let failed = 0
@@ -2243,11 +2277,13 @@ export function createApiRouter() {
         sent,
         failed,
         skipped,
+        // 手动挑人的那次发信留个痕：选了几个收件人（null = 全体目标学生）
+        recipients: wantedIds ? wantedIds.length : null,
         staff_id: me.id,
         staff_name: me.name
       })
       console.log(
-        `[email] ${notice.id} ▸ provider=${provider} 成功 ${sent} / 失败 ${failed} / 跳过 ${skipped}（${me.name}）`
+        `[email] ${notice.id} ▸ provider=${provider} 收件人 ${wantedIds ? wantedIds.length : '全部目标'} 成功 ${sent} / 失败 ${failed} / 跳过 ${skipped}（${me.name}）`
       )
       res.json({ ok: failed === 0, provider, sent, failed, skipped, errors })
     })
