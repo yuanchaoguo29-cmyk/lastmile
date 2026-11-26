@@ -26,13 +26,16 @@ const EMPTY_MSG = { tone: '', text: '' }
 /* 401 时先让人读完面板里的提示，再回门口；想改成一检测到就锁，把这个值调成 0 即可 */
 const AUTH_LOCK_DELAY_MS = 900
 
-/* api.js 不抛状态码，只能靠文案判断「本机存的访问密码已经不管用」。
+/* 判断「本机存的账号密码已经不管用」：先看 api.js 抛出的状态码，只有文案时才看词。
    AI 侧的报错里常出现 Key / api_key / model，先排掉这些词，
    免得把「API Key 无效」误判成「访问密码失效」把人踢回门口。 */
 const AI_WORDS = /api[ _-]?key|deepseek|base\s*url|模型|网络|超时/i
 const AUTH_WORDS = /401|403|unauthoriz|forbidden|访问密码|未授权|口令|counselor/i
 
 function isSessionAuthError(e) {
+  /* 新接口的 401/403 只带一句中文（「账号或密码不对」），先看状态码 */
+  const status = Number(e && e.status)
+  if (status === 401 || status === 403) return true
   const m = String((e && e.message) || '')
   if (!m) return false
   if (AI_WORDS.test(m)) return false
@@ -73,6 +76,10 @@ export default function SettingsPanel({ open, onClose, onLock }) {
   const [me, setMe] = useState(null)
   const [meLoading, setMeLoading] = useState(false)
   const [meErr, setMeErr] = useState('')
+
+  /* owner 改的是「访问密码」（总管密码），其它角色改的是自己账号的登录密码。
+     me 还没读回来时按 owner 处理：能打开这个面板的本来就是总管。 */
+  const pwOwner = !me || me.role === 'owner'
 
   const panelRef = useRef(null)
   const closeRef = useRef(null)
@@ -251,12 +258,14 @@ export default function SettingsPanel({ open, onClose, onLock }) {
     setPwBusy(true)
     setPwMsg(EMPTY_MSG)
     try {
-      await changeCounselorKey(cur, next)
-      setPwMsg({ tone: 'ok', text: '已修改。下次进入请用新密码。' })
+      /* 总管走 /api/auth/change-key，其它账号走 PATCH /api/staff/me/password；
+         api.js 按这个布尔值分流，不传时由它按本机用户名兜底 */
+      await changeCounselorKey(cur, next, pwOwner)
+      setPwMsg({ tone: 'ok', text: '已修改。下次登录请用新密码。' })
       setCur('')
       setNext('')
       setConfirm('')
-      setMeta((m) => (m ? { ...m, counselorKeyCustom: true } : m))
+      if (pwOwner) setMeta((m) => (m ? { ...m, counselorKeyCustom: true } : m))
       /* 本机那份密码由 api.js 的 changeCounselorKey 自己换成新的，所以不会掉线；
          这里不碰 localStorage，也不 onLock。 */
     } catch (e) {
@@ -384,16 +393,20 @@ export default function SettingsPanel({ open, onClose, onLock }) {
 
           {meta ? (
             <>
-              {/* ---------- 1. 访问密码 ---------- */}
+              {/* ---------- 1. 密码 ---------- */}
               <section className="lm-counselor-set-sec">
                 <div className="lm-counselor-set-sec-head">
-                  <Eyebrow>ACCESS · 访问密码</Eyebrow>
-                  <span className={`lm-counselor-set-badge${custom ? ' is-on' : ''}`}>
-                    {custom ? '已自定义' : '默认密码'}
-                  </span>
+                  <Eyebrow>{pwOwner ? 'ACCESS · 访问密码' : 'ACCESS · 登录密码'}</Eyebrow>
+                  {pwOwner ? (
+                    <span className={`lm-counselor-set-badge${custom ? ' is-on' : ''}`}>
+                      {custom ? '已自定义' : '默认密码'}
+                    </span>
+                  ) : null}
                 </div>
                 <p className="lm-counselor-set-desc">
-                  改完立即生效。已经打开的页面，下一次请求会要求重新输入。
+                  {pwOwner
+                    ? '总管密码，改完立即生效。已经打开的页面，下一次请求会要求重新输入。'
+                    : '改的是你自己账号的登录密码，改完立即生效，下次登录用新密码。'}
                 </p>
 
                 <div className="lm-counselor-set-field">
@@ -478,7 +491,7 @@ export default function SettingsPanel({ open, onClose, onLock }) {
                     disabled={!pwReady}
                     className="lm-counselor-set-btn"
                   >
-                    {pwBusy ? '正在修改…' : '修改访问密码'}
+                    {pwBusy ? '正在修改…' : pwOwner ? '修改访问密码' : '修改我的密码'}
                   </Btn>
                 </div>
               </section>
@@ -652,9 +665,13 @@ export default function SettingsPanel({ open, onClose, onLock }) {
    Key 只存服务端（加密），这一侧只看到掩码；留空表示不改。 */
 
 const SENDER_PROVIDERS = [
-  { id: 'resend', label: 'resend', note: 'HTTP API，真发信' },
-  { id: 'log', label: 'log', note: '本地联调，不会真发信' }
+  { id: 'smtp', label: 'SMTP', note: '学校服务器，465 / 587' },
+  { id: 'resend', label: 'Resend', note: 'HTTP API，Railway 上用' }
 ]
+
+/* 端口决定加密方式（服务端同样按端口判定）：465 直连 SSL，587 先明文再 STARTTLS */
+const SMTP_PORT_SSL = 465
+const SMTP_PORT_STARTTLS = 587
 
 /* 服务端一般回掩码（a***@x.com）；万一回明文，本地也先掩一道再显示 */
 function maskEmail(v) {
@@ -676,27 +693,48 @@ function SenderSection({ open, onAuthError }) {
   const [loadErr, setLoadErr] = useState('')
 
   const [email, setEmail] = useState('')
-  const [provider, setProvider] = useState('resend')
+  const [provider, setProvider] = useState('smtp')
   const [apiKey, setApiKey] = useState('')
+  /* SMTP 配置：主机 / 端口 / 加密方式 / 用户名 / 密码或授权码 */
+  const [smtpHost, setSmtpHost] = useState('')
+  const [smtpPort, setSmtpPort] = useState(String(SMTP_PORT_SSL))
+  const [smtpSecure, setSmtpSecure] = useState(true)
+  const [smtpUser, setSmtpUser] = useState('')
+  const [smtpPass, setSmtpPass] = useState('')
   const [busy, setBusy] = useState('') /* '' | 'save' | 'clear' */
   const [msg, setMsg] = useState(EMPTY_MSG)
 
   /* 每次读取递增：关掉面板后晚回来的结果不落到表单上 */
   const seqRef = useRef(0)
 
-  /* 服务端回来的绑定状态统一在这儿落地：表单跟着新状态重置 */
+  /* 服务端回来的绑定状态统一在这儿落地：表单跟着新状态重置。
+     SMTP 只回掩码（主机/端口/加密方式/掩码用户名），密码永远读不回来。 */
   function applyEmail(d) {
     const e = d && typeof d === 'object' ? d : {}
+    const s = e.smtp && typeof e.smtp === 'object' ? e.smtp : null
     const next = {
       bound: Boolean(e.bound),
       address: String(e.address || e.address_masked || ''),
       provider: e.provider ? String(e.provider) : '',
-      from: e.from ? String(e.from) : ''
+      from: e.from ? String(e.from) : '',
+      smtp: s
+        ? {
+            host: String(s.host || ''),
+            port: s.port ? String(s.port) : '',
+            secure: Boolean(s.secure),
+            user_masked: String(s.user_masked || '')
+          }
+        : null
     }
     setCur(next)
     setEmail('')
     setApiKey('')
-    setProvider(next.provider === 'log' ? 'log' : 'resend')
+    setProvider(next.provider === 'resend' ? 'resend' : 'smtp')
+    setSmtpHost(next.smtp ? next.smtp.host : '')
+    setSmtpPort(next.smtp && next.smtp.port ? next.smtp.port : String(SMTP_PORT_SSL))
+    setSmtpSecure(next.smtp ? Boolean(next.smtp.secure) : true)
+    setSmtpUser('')
+    setSmtpPass('')
     return next
   }
 
@@ -723,7 +761,12 @@ function SenderSection({ open, onAuthError }) {
     setCur(null)
     setEmail('')
     setApiKey('')
-    setProvider('resend')
+    setProvider('smtp')
+    setSmtpHost('')
+    setSmtpPort(String(SMTP_PORT_SSL))
+    setSmtpSecure(true)
+    setSmtpUser('')
+    setSmtpPass('')
     setBusy('')
     setMsg(EMPTY_MSG)
     fetchEmail()
@@ -734,6 +777,18 @@ function SenderSection({ open, onAuthError }) {
 
   const bound = Boolean(cur && cur.bound)
   const curProvider = bound ? cur.provider || '' : ''
+  const curSmtp = bound && curProvider === 'smtp' ? (cur && cur.smtp) || null : null
+  /* 已绑 SMTP 时，密码/用户名留空＝沿用已保存的那份；首次绑定必须填全 */
+  const smtpFirstBind = provider === 'smtp' && !(bound && curProvider === 'smtp')
+  const smtpHostOk = Boolean(smtpHost.trim())
+  const smtpPortNum = Number(smtpPort)
+  const smtpPortOk = Number.isInteger(smtpPortNum) && smtpPortNum >= 1 && smtpPortNum <= 65535
+  const smtpUserMissing = smtpFirstBind && !smtpUser.trim()
+  const smtpPassMissing = smtpFirstBind && !smtpPass
+  const smtpBad = provider === 'smtp' && (!smtpHostOk || !smtpPortOk || smtpUserMissing || smtpPassMissing)
+  /* 一开始不要满屏黄字：动过表单再提示缺什么 */
+  const smtpDirty = Boolean(email.trim() || smtpHost.trim() || smtpUser.trim() || smtpPass)
+
   const addr = email.trim()
   const emailOk = EMAIL_RE.test(addr)
   const emailBad = Boolean(addr) && !emailOk
@@ -741,7 +796,20 @@ function SenderSection({ open, onAuthError }) {
   const keyNeeded = provider === 'resend' && !(bound && curProvider === 'resend')
   const keyMissing = keyNeeded && !apiKey.trim()
   const formBusy = Boolean(busy)
-  const canSave = emailOk && !keyMissing && !formBusy
+  const canSave = emailOk && !keyMissing && !smtpBad && !formBusy
+
+  /* 选 SSL / STARTTLS 时同时把端口改过去；手改端口也同步加密方式 */
+  function pickTls(secure) {
+    setSmtpSecure(secure)
+    setSmtpPort(String(secure ? SMTP_PORT_SSL : SMTP_PORT_STARTTLS))
+  }
+
+  function onPortChange(v) {
+    const t = String(v || '').trim()
+    setSmtpPort(t)
+    if (Number(t) === SMTP_PORT_SSL) setSmtpSecure(true)
+    else if (Number(t) === SMTP_PORT_STARTTLS) setSmtpSecure(false)
+  }
 
   async function save() {
     if (!canSave) return
@@ -749,7 +817,18 @@ function SenderSection({ open, onAuthError }) {
     setMsg(EMPTY_MSG)
     try {
       const body = { email: addr, provider }
-      if (provider === 'resend' && apiKey.trim()) body.api_key = apiKey.trim()
+      if (provider === 'resend') {
+        if (apiKey.trim()) body.api_key = apiKey.trim()
+      } else {
+        body.smtp = {
+          host: smtpHost.trim(),
+          port: smtpPortNum,
+          secure: smtpSecure,
+          user: smtpUser.trim()
+        }
+        // 留空＝不改已保存的密码；首次绑定前面已经拦下来了
+        if (smtpPass) body.smtp.pass = smtpPass
+      }
       if (cur && cur.from) body.from = cur.from
       const r = await setMyEmail(body)
       if (r && r.ok === false) {
@@ -757,18 +836,20 @@ function SenderSection({ open, onAuthError }) {
         return
       }
       const srv = r && r.email && typeof r.email === 'object' ? r.email : {}
+      const keptSmtp = provider === 'smtp' ? (srv.smtp || cur?.smtp || null) : null
       applyEmail({
         bound: srv.bound === undefined ? true : srv.bound,
         address: srv.address || srv.address_masked || maskEmail(addr),
         provider: srv.provider || provider,
-        from: srv.from || (cur && cur.from) || ''
+        from: srv.from || (cur && cur.from) || '',
+        smtp: keptSmtp
       })
       setMsg({
         tone: 'ok',
         text:
-          provider === 'log'
-            ? '已保存（log 通道：只写日志，不会真发信）'
-            : '已保存，通知详情页可以一键发到学生邮箱'
+          provider === 'smtp'
+            ? '已保存，通知详情页可以一键发到学生邮箱（SMTP）'
+            : '已保存，通知详情页可以一键发到学生邮箱（Resend）'
       })
     } catch (e) {
       if (isSessionAuthError(e)) {
@@ -806,7 +887,7 @@ function SenderSection({ open, onAuthError }) {
   }
 
   const shown = bound
-    ? `${maskEmail(cur.address) || '已绑定'}${curProvider ? ` · ${curProvider}` : ''}`
+    ? `${maskEmail(cur.address) || '已绑定'}${curProvider ? ` · ${curProvider === 'smtp' ? 'SMTP' : 'Resend'}` : ''}`
     : '未绑定'
 
   return (
@@ -818,7 +899,7 @@ function SenderSection({ open, onAuthError }) {
         </span>
       </div>
       <p className="lm-counselor-set-desc">
-        同一份通知可以一键发到学生邮箱；Railway 封禁出站 SMTP，所以走 HTTP API（Resend 免费额度够用）
+        同一份通知可以一键发到学生邮箱。学校服务器用 SMTP；Railway 封禁出站 SMTP，那边只能用 Resend。
       </p>
 
       <div className="lm-sender-cur">
@@ -887,33 +968,156 @@ function SenderSection({ open, onAuthError }) {
             </div>
           </div>
 
-          <div className="lm-counselor-set-field">
-            <div className="lm-counselor-set-labelrow">
-              <label className="lm-counselor-set-label" htmlFor="lm-set-sender-key">
-                API Key
-              </label>
-              {bound && curProvider === 'resend' ? (
-                <span className="lm-counselor-set-mini">已保存，留空=不改</span>
+          {provider === 'smtp' ? (
+            <>
+              <div className="lm-counselor-set-field">
+                <div className="lm-smtp-grid">
+                  <div className="lm-counselor-set-field">
+                    <div className="lm-counselor-set-labelrow">
+                      <label className="lm-counselor-set-label" htmlFor="lm-set-smtp-host">
+                        SMTP 主机
+                      </label>
+                    </div>
+                    <input
+                      id="lm-set-smtp-host"
+                      className="lm-counselor-set-input is-mono"
+                      value={smtpHost}
+                      autoComplete="off"
+                      spellCheck="false"
+                      placeholder="smtp.university.edu.cn"
+                      disabled={formBusy}
+                      onChange={(e) => setSmtpHost(e.target.value)}
+                    />
+                  </div>
+                  <div className="lm-counselor-set-field">
+                    <div className="lm-counselor-set-labelrow">
+                      <label className="lm-counselor-set-label" htmlFor="lm-set-smtp-port">
+                        端口
+                      </label>
+                    </div>
+                    <input
+                      id="lm-set-smtp-port"
+                      className="lm-counselor-set-input is-mono"
+                      inputMode="numeric"
+                      value={smtpPort}
+                      autoComplete="off"
+                      spellCheck="false"
+                      placeholder="465"
+                      disabled={formBusy}
+                      onChange={(e) => onPortChange(e.target.value)}
+                    />
+                  </div>
+                </div>
+                {provider === 'smtp' && !smtpPortOk ? (
+                  <p className="lm-counselor-set-hint is-err">端口要是 1–65535 之间的数字</p>
+                ) : null}
+              </div>
+
+              <div className="lm-counselor-set-field">
+                <div className="lm-counselor-set-labelrow">
+                  <span className="lm-counselor-set-label">加密方式</span>
+                </div>
+                <div className="lm-sender-opts" role="radiogroup" aria-label="SMTP 加密方式">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={smtpSecure}
+                    className={`lm-sender-opt${smtpSecure ? ' is-on' : ''}`}
+                    disabled={formBusy}
+                    onClick={() => pickTls(true)}
+                  >
+                    <span className="lm-sender-opt-k">465 · SSL</span>
+                    <span className="lm-sender-opt-n">直连加密，选它自动填 465</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!smtpSecure}
+                    className={`lm-sender-opt${!smtpSecure ? ' is-on' : ''}`}
+                    disabled={formBusy}
+                    onClick={() => pickTls(false)}
+                  >
+                    <span className="lm-sender-opt-k">587 · STARTTLS</span>
+                    <span className="lm-sender-opt-n">先明文再升级，选它自动填 587</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="lm-counselor-set-field">
+                <div className="lm-counselor-set-labelrow">
+                  <label className="lm-counselor-set-label" htmlFor="lm-set-smtp-user">
+                    用户名
+                  </label>
+                  {curSmtp ? <span className="lm-counselor-set-mini">已保存，留空=不改</span> : null}
+                </div>
+                <input
+                  id="lm-set-smtp-user"
+                  className="lm-counselor-set-input is-mono"
+                  value={smtpUser}
+                  autoComplete="off"
+                  spellCheck="false"
+                  placeholder={curSmtp?.user_masked ? `留空沿用 ${curSmtp.user_masked}` : 'notice@university.edu.cn'}
+                  disabled={formBusy}
+                  onChange={(e) => setSmtpUser(e.target.value)}
+                />
+                {smtpUserMissing && smtpDirty ? (
+                  <p className="lm-counselor-set-hint is-warn">第一次配 SMTP 要填用户名</p>
+                ) : null}
+              </div>
+
+              <div className="lm-counselor-set-field">
+                <div className="lm-counselor-set-labelrow">
+                  <label className="lm-counselor-set-label" htmlFor="lm-set-smtp-pass">
+                    密码或授权码
+                  </label>
+                  {curSmtp ? <span className="lm-counselor-set-mini">已保存，留空=不改</span> : null}
+                </div>
+                <input
+                  id="lm-set-smtp-pass"
+                  className="lm-counselor-set-input is-mono"
+                  type="password"
+                  value={smtpPass}
+                  autoComplete="new-password"
+                  spellCheck="false"
+                  placeholder={curSmtp ? '留空不改' : '学校邮箱的 SMTP 授权码'}
+                  disabled={formBusy}
+                  onChange={(e) => setSmtpPass(e.target.value)}
+                />
+                <p className="lm-counselor-set-hint">
+                  密码只存服务端（加密），这里看不到明文；留空表示不改。很多学校邮箱要用「授权码」而不是登录密码。
+                </p>
+                {smtpPassMissing && smtpDirty ? (
+                  <p className="lm-counselor-set-hint is-warn">第一次配 SMTP 要填密码或授权码</p>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="lm-counselor-set-field">
+              <div className="lm-counselor-set-labelrow">
+                <label className="lm-counselor-set-label" htmlFor="lm-set-sender-key">
+                  API Key
+                </label>
+                {bound && curProvider === 'resend' ? (
+                  <span className="lm-counselor-set-mini">已保存，留空=不改</span>
+                ) : null}
+              </div>
+              <input
+                id="lm-set-sender-key"
+                className="lm-counselor-set-input is-mono"
+                type="password"
+                value={apiKey}
+                autoComplete="off"
+                spellCheck="false"
+                placeholder={bound && curProvider === 'resend' ? '留空不改' : 're_…'}
+                disabled={formBusy}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+              <p className="lm-counselor-set-hint">Key 只存服务端（加密），这里看不到明文；留空表示不改。</p>
+              {keyMissing ? (
+                <p className="lm-counselor-set-hint is-warn">走 Resend 要先填 API Key</p>
               ) : null}
             </div>
-            <input
-              id="lm-set-sender-key"
-              className="lm-counselor-set-input is-mono"
-              type="password"
-              value={apiKey}
-              autoComplete="off"
-              spellCheck="false"
-              placeholder={
-                provider === 'log' ? 'log 通道不用填' : bound && curProvider === 'resend' ? '留空不改' : 're_…'
-              }
-              disabled={provider === 'log' || formBusy}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-            <p className="lm-counselor-set-hint">Key 只存服务端（加密），这里看不到明文；留空表示不改。</p>
-            {keyMissing ? (
-              <p className="lm-counselor-set-hint is-warn">走 Resend 要先填 API Key</p>
-            ) : null}
-          </div>
+          )}
 
           {msg.text ? (
             <p
@@ -955,53 +1159,58 @@ function SenderSection({ open, onAuthError }) {
 
 /* ---------- 账号段（settings 面板里的第四段，按角色变形） ----------
    owner 管辅导员、counselor 管自己的助理、assistant 整段不显示（由父组件拦）。
-   一个账号一把密码：发通知、催办按这把密码记在各自名下。
-   明文密码只在新建 / 重置时由服务端返回一次，之后列表里只有掩码，
+   一个账号 = 用户名 + 密码：发通知、催办按这个账号记在各自名下。
+   新建时用户名由这里填、初始密码由服务端固定发 123456；重置密码仍由服务端随机生成，
+   明文只在新建 / 重置时返回一次，之后列表里只有掩码，
    所以拿到就立刻摆进琥珀色框里让人复制，点「我已记下」才收起。 */
 
 const STAFF_EMPTY = '还没有助理。助理能发通知、催办、导出回执，但改不了设置。'
 const COUNSELOR_EMPTY = '还没有辅导员。辅导员能自己导入学生、发通知，只能看到自己名下的。'
 
+/* 新建账号的初始密码：服务端固定发这个，前端只负责告诉人，不让填 */
+const INITIAL_PASSWORD = '123456'
+
 const ACCOUNT_CFG = {
   owner: {
     eyebrow: 'COUNSELORS · 辅导员账号',
-    desc: '辅导员用自己的密码登录同一套工作台，学生、通知、回执都只在自己名下。总管能建、停用、重置和删除他们。',
+    desc: '辅导员用自己的用户名和密码登录同一套工作台，学生、通知、回执都只在自己名下。总管能建、停用、重置和删除他们。',
     empty: COUNSELOR_EMPTY,
     addLabel: '添加辅导员',
     adding: '添加中…',
-    nameLabel: '辅导员姓名',
+    usernameLabel: '用户名',
     inputId: 'lm-set-counselor-name',
     placeholder: '例如：李辅导员',
     countSuffix: '位辅导员',
     nameTip: '辅导员',
     subKey: '助理',
-    delAsk: (n) => `删除辅导员「${n}」？删掉后这把密码立刻失效，他名下的学生和通知记录会留在系统里。`,
-    hint: '添加后会显示一次密码，复制发给本人；之后这里只看得到掩码。',
+    delAsk: (n) => `删除辅导员「${n}」？删掉后这个账号立刻失效，他名下的学生和通知记录会留在系统里。`,
+    hint: `用户名就是登录账号，可以用中文，最长 24 个字；初始密码固定 ${INITIAL_PASSWORD}，让对方首次登录后自己改。`,
     aria: '辅导员账号'
   },
   counselor: {
     eyebrow: 'STAFF · 助理账号',
-    desc: '助理用自己的密码登录同一套工作台，发通知和催办会记在各自名下。他们看不到这一页的设置。',
+    desc: '助理用自己的用户名和密码登录同一套工作台，发通知和催办会记在各自名下。他们看不到这一页的设置。',
     empty: STAFF_EMPTY,
     addLabel: '添加助理',
     adding: '添加中…',
-    nameLabel: '姓名',
+    usernameLabel: '用户名',
     inputId: 'lm-set-staff-name',
     placeholder: '例如：王助理',
     countSuffix: '人',
     nameTip: '助理',
     subKey: '',
-    delAsk: (n) => `删除助理「${n}」？删掉后这把密码立刻失效，他发过的通知记录会留在系统里。`,
-    hint: '添加后会显示一次密码，复制发给本人；之后这里只看得到掩码。',
+    delAsk: (n) => `删除助理「${n}」？删掉后这个账号立刻失效，他发过的通知记录会留在系统里。`,
+    hint: `用户名就是登录账号，可以用中文，最长 24 个字；初始密码固定 ${INITIAL_PASSWORD}，让对方首次登录后自己改。`,
     aria: '助理账号'
   }
 }
 
-/* 服务端一般会给 key_masked；万一没给，本地按同一套规则兜一个，别把明文塞进列表 */
+/* 服务端一般会给 key_masked；万一没给，本地按同一套规则兜一个，别把明文塞进列表。
+   初始密码 123456 这类短密码一律显示成圆点，跟服务端 maskStaffKey 的规则对齐 */
 function maskKey(key) {
   const s = String(key || '')
   if (!s) return ''
-  if (s.length <= 4) return '••••'
+  if (s.length <= 6) return '••••••'
   return `${s.slice(0, 4)}…${s.slice(-4)}`
 }
 
@@ -1031,14 +1240,15 @@ function StaffSection({ open, role, onAuthError }) {
   const [loadErr, setLoadErr] = useState('')
 
   /* 新建 */
-  const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
   const [creating, setCreating] = useState(false)
 
   /* 行内操作防重：{ id, kind: 'toggle' | 'regen' | 'del' } */
   const [busy, setBusy] = useState(null)
   const [opErr, setOpErr] = useState('')
+  const [opOk, setOpOk] = useState('')
 
-  /* 一次性明文密码：{ id, name, key } */
+  /* 一次性账号信息：{ id, username, password } */
   const [secret, setSecret] = useState(null)
 
   /* 每次读取递增：关掉面板后晚回来的请求不落到列表上 */
@@ -1072,6 +1282,7 @@ function StaffSection({ open, role, onAuthError }) {
     setLoaded(false)
     setSecret(null)
     setOpErr('')
+    setOpOk('')
     fetchStaff()
     return () => {
       seqRef.current += 1
@@ -1091,7 +1302,7 @@ function StaffSection({ open, role, onAuthError }) {
   }, [secret])
 
   const blocked = creating || Boolean(busy)
-  const canCreate = name.trim().length > 0 && !blocked
+  const canCreate = username.trim().length > 0 && !blocked
 
   /* 就地更新一行，不整页重拉 */
   function mergeRow(id, patch) {
@@ -1103,31 +1314,39 @@ function StaffSection({ open, role, onAuthError }) {
   function rowFrom(st, plainKey, fallbackName) {
     const row = { ...(st || {}) }
     if (plainKey) row.key_masked = maskKey(plainKey)
-    if (fallbackName && !row.name) row.name = fallbackName
+    if (fallbackName) {
+      if (!row.name) row.name = fallbackName
+      if (!row.username) row.username = fallbackName
+    }
     return row
   }
 
   async function submitCreate() {
-    const nm = name.trim()
-    if (!nm || blocked) return
+    const um = username.trim()
+    if (!um || blocked) return
     setCreating(true)
     setOpErr('')
+    setOpOk('')
     try {
-      const r = await createStaff(nm)
+      const r = await createStaff(um)
       const st = memberOf(r)
-      const key = String((r && r.access_key) || '')
-      if (!st || !st.id || !key) {
-        /* 建好了却没回密码：先刷新让人看到这一行，别让用户重复添加 */
-        setOpErr(`服务端没返回密码，${cfg.nameTip}可能已经建好：列表已刷新，请对他点一次「重置密码」`)
+      /* 服务端把这一次的初始密码放在顶层 access_key；没回就按固定的 123456 展示 */
+      const initial = String((r && r.access_key) || '') || INITIAL_PASSWORD
+      if (!st || !st.id) {
+        /* 建好了却没回成员对象：先刷新让人看到这一行，别让用户重复添加 */
+        setOpErr(`服务端没返回账号信息，${cfg.nameTip}可能已经建好：列表已刷新，请核对`)
+        setUsername('')
         await fetchStaff()
         return
       }
-      const row = rowFrom(st, key, nm)
+      const row = rowFrom(st, initial, um)
+      const account = row.username || row.name || um
       /* 先剔掉同 id 的旧行，避免万一列表里已经有他时撞 key */
       setRows((prev) => [...prev.filter((x) => x.id !== row.id), row])
       setLoaded(true)
-      setSecret({ id: row.id, name: row.name, key })
-      setName('')
+      setSecret({ id: row.id, username: account, password: initial })
+      setOpOk(`账号已创建：${account}，初始密码 ${initial}，请让对方首次登录后自行修改`)
+      setUsername('')
     } catch (e) {
       if (isSessionAuthError(e)) {
         onAuthError()
@@ -1144,6 +1363,7 @@ function StaffSection({ open, role, onAuthError }) {
     const active = isActive(row.active)
     setBusy({ id: row.id, kind: 'toggle' })
     setOpErr('')
+    setOpOk('')
     try {
       const r = await updateStaff(row.id, { active: !active })
       if (r && r.ok === false) {
@@ -1171,6 +1391,7 @@ function StaffSection({ open, role, onAuthError }) {
     if (!window.confirm(`重置「${row.name}」的密码？旧密码立刻失效，他正在用的页面会被登出。`)) return
     setBusy({ id: row.id, kind: 'regen' })
     setOpErr('')
+    setOpOk('')
     try {
       const r = await updateStaff(row.id, { regenerate: true })
       if (r && r.ok === false) {
@@ -1181,7 +1402,8 @@ function StaffSection({ open, role, onAuthError }) {
       const key = String((r && r.access_key) || '')
       mergeRow(row.id, rowFrom(st, key, row.name))
       if (key) {
-        setSecret({ id: row.id, name: (st && st.name) || row.name, key })
+        const account = (st && (st.username || st.name)) || row.username || row.name
+        setSecret({ id: row.id, username: account, password: key })
       } else {
         /* 密码已换但没有明文：不能让人以为旧密码还能用 */
         setOpErr('密码已重置，但服务端没回明文：再点一次「重置密码」拿新密码')
@@ -1202,6 +1424,7 @@ function StaffSection({ open, role, onAuthError }) {
     if (!window.confirm(cfg.delAsk(row.name))) return
     setBusy({ id: row.id, kind: 'del' })
     setOpErr('')
+    setOpOk('')
     try {
       const r = await deleteStaff(row.id)
       if (r && r.ok === false) {
@@ -1269,8 +1492,8 @@ function StaffSection({ open, role, onAuthError }) {
                   key={row.id}
                 >
                   <div className="lm-staff-main">
-                    <span className="lm-staff-name" title={row.name}>
-                      {row.name}
+                    <span className="lm-staff-name" title={row.name || row.username || ''}>
+                      {row.name || row.username || '—'}
                     </span>
                     <span className={`lm-staff-state${active ? ' is-on' : ''}`}>
                       <span className="lm-staff-dot" aria-hidden="true" />
@@ -1311,6 +1534,11 @@ function StaffSection({ open, role, onAuthError }) {
                   </div>
 
                   <div className="lm-staff-meta">
+                    <span className="lm-staff-meta-k">用户名</span>
+                    <code className="lm-staff-meta-v is-mono">{row.username || row.name || '—'}</code>
+                    <span className="lm-staff-meta-dot" aria-hidden="true">
+                      ·
+                    </span>
                     <span className="lm-staff-meta-k">密码</span>
                     <code className={`lm-staff-meta-v is-mono${row.key_masked ? '' : ' is-dim'}`}>
                       {row.key_masked || '—'}
@@ -1336,13 +1564,21 @@ function StaffSection({ open, role, onAuthError }) {
       {secret ? (
         <div className="lm-staff-secret" ref={secretRef} role="status">
           <div className="lm-staff-secret-head">
-            <Eyebrow>NEW KEY · 只显示这一次</Eyebrow>
-            <span className="lm-staff-secret-name">{secret.name}</span>
+            <Eyebrow>ACCOUNT · 账号信息</Eyebrow>
+            <span className="lm-staff-secret-name">{secret.username}</span>
           </div>
-          <p className="lm-staff-secret-tip">{`把下面这串密码发给${secret.name}，只显示这一次`}</p>
+          <p className="lm-staff-secret-tip">
+            {`把下面这组账号发给 ${secret.username}，初始密码请让对方首次登录后自行修改`}
+          </p>
           <div className="lm-staff-secret-row">
-            <code className="lm-staff-secret-key">{secret.key}</code>
-            <CopyBtn text={secret.key} label="复制" />
+            <span className="lm-staff-meta-k">账号</span>
+            <code className="lm-staff-secret-key">{secret.username}</code>
+            <CopyBtn text={secret.username} label="复制" />
+          </div>
+          <div className="lm-staff-secret-row">
+            <span className="lm-staff-meta-k">初始密码</span>
+            <code className="lm-staff-secret-key">{secret.password}</code>
+            <CopyBtn text={secret.password} label="复制" />
           </div>
           <div className="lm-staff-secret-foot">
             <Btn variant="amber" size="sm" onClick={() => setSecret(null)}>
@@ -1358,22 +1594,28 @@ function StaffSection({ open, role, onAuthError }) {
         </p>
       ) : null}
 
+      {opOk ? (
+        <p className="lm-counselor-set-msg is-ok" role="status">
+          {opOk}
+        </p>
+      ) : null}
+
       <div className="lm-staff-add">
         <div className="lm-staff-field">
           <label className="lm-staff-label" htmlFor={cfg.inputId}>
-            {cfg.nameLabel}
+            {cfg.usernameLabel}
           </label>
           <input
             id={cfg.inputId}
             className="lm-staff-input"
             type="text"
-            value={name}
+            value={username}
             autoComplete="off"
             spellCheck="false"
             maxLength={24}
             placeholder={cfg.placeholder}
             disabled={creating}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => setUsername(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && canCreate) submitCreate()
             }}

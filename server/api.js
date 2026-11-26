@@ -5,7 +5,7 @@ import { Router } from 'express'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import QRCode from 'qrcode'
 import { nowIso } from './db.js'
 import { repo } from './repo.js'
@@ -22,7 +22,17 @@ import {
   keyStatus,
   brokenKeyList
 } from './settings.js'
-import { safeEqual, secretSource, fingerprint, encryptSecret, decryptSecret } from './crypto.js'
+import {
+  safeEqual,
+  secretSource,
+  fingerprint,
+  encryptSecret,
+  decryptSecret,
+  hashPassword,
+  verifyPassword,
+  DEFAULT_STAFF_PASSWORD
+} from './crypto.js'
+import { parseStudentId } from './student-id.js'
 import { sendMail } from './email.js'
 
 /* 兜底补载 .env：正式启动请用 `node --env-file-if-exists=.env server/index.js`。
@@ -73,17 +83,22 @@ const wrap = (fn) => (req, res, next) => {
   }
 }
 
-/* 总管（owner）密码。契约冻结值 12345678（见 .env.example），
-   生产环境用 COUNSELOR_KEY 环境变量覆盖；后台改密码则落 settings 表。 */
+/* 总管（owner）账号：username 固定 'owner'，密码来自 COUNSELOR_KEY（默认 12345678，见 .env.example），
+   后台改密码则落 settings 表。总管不落 staff 表——表里 id='owner' 那行只存他自己的发件邮箱。 */
 const DEFAULT_OWNER_KEY = '12345678'
 const counselorKey = () => process.env.COUNSELOR_KEY || DEFAULT_OWNER_KEY
 
 /** 带角色的登录态。owner 的 id 固定为 'owner'（不在 staff 表里，除了邮箱那行隐藏配置） */
 const OWNER_ID = 'owner'
 const OWNER_NAME = '总管'
+const OWNER_USERNAME = 'owner'
+
+/* 辅导员/助理账号：账号名由创建者给（允许中文），初始密码一律 DEFAULT_STAFF_PASSWORD(123456)，
+   本人登录后自行修改；access_key 列只为兼容旧库保留，不再参与任何登录校验。 */
 
 /* 登录失败限速：同一 IP 5 分钟内错 10 次，锁 5 分钟。
-   目的是掐断「爆破辅导员密码 → 进后台替换/试探 API Key」这条路。 */
+   目的是掐断「爆破辅导员密码 → 进后台替换/试探 API Key」这条路。
+   新登录接口 /api/auth/login 与鉴权中间件共用这套计数。 */
 const AUTH_WINDOW_MS = 5 * 60 * 1000
 const AUTH_MAX_FAILS = 10
 const authFails = new Map()
@@ -109,9 +124,91 @@ function authNoteFail(ip) {
   authFails.set(ip, rec)
 }
 
-/** /notices* /roster /staff /me 的鉴权：总管密码（COUNSELOR_KEY）或 staff 表里任一启用中的账号。
-    通过的请求挂 req.staff = { id, name, role, parent_id }，供 scopeOf 与留痕用。
-    口令比较走常量时间；失败计入限速。 */
+/** 登录态：对外只暴露这五个字段（不带 access_key / pwd_* / 邮箱凭据） */
+const sessionOf = (row) => ({
+  id: row.id,
+  name: row.name,
+  role: row.role || 'assistant',
+  parent_id: row.parent_id || null,
+  username: row.username || null
+})
+
+const ownerSession = () => ({
+  id: OWNER_ID,
+  name: OWNER_NAME,
+  role: 'owner',
+  parent_id: null,
+  username: OWNER_USERNAME
+})
+
+/** 账号名 + 密码 → 登录态；失败返回 null。
+    不区分「没这个账号」与「密码不对」，避免被用来枚举账号。
+    总管：username === 'owner' + 环境变量/设置里的密码；其余：staff 表 + scrypt 校验。 */
+function loginCheck(username, password) {
+  const user = String(username ?? '').trim()
+  const pass = String(password ?? '')
+  if (!user || !pass) return null
+
+  if (user.toLowerCase() === OWNER_USERNAME) {
+    return safeEqual(pass, counselorKey()) ? ownerSession() : null
+  }
+
+  const row = repo.getStaffByUsername(user)
+  if (!row || row.role === 'owner' || Number(row.active) !== 1) return null
+  if (!row.pwd_hash || !row.pwd_salt) return null
+  return verifyPassword(pass, row.pwd_hash, row.pwd_salt) ? sessionOf(row) : null
+}
+
+/* 认证缓存：scrypt 单次约 50-80ms，每个请求都跑一遍太重。
+   校验通过后缓存 sha256(username \0 password) → 登录态，5 分钟有效；
+   只缓存「成功」，改密码/停用/删账号时整表清空（cacheClear）。
+   明文密码只在计算缓存键时用一次，不进缓存键、不入日志。 */
+const AUTH_CACHE_TTL_MS = 5 * 60 * 1000
+const AUTH_CACHE_MAX = 500
+const authCache = new Map()
+
+const authCacheKey = (username, password) =>
+  createHash('sha256').update(`${username}\u0000${password}`, 'utf8').digest('hex')
+
+function authCacheGet(key) {
+  const hit = authCache.get(key)
+  if (!hit) return null
+  if (hit.exp <= Date.now()) {
+    authCache.delete(key)
+    return null
+  }
+  return hit.staff
+}
+
+function authCacheSet(key, staff) {
+  const now = Date.now()
+  if (authCache.size >= AUTH_CACHE_MAX) {
+    for (const [k, v] of authCache) if (v.exp <= now) authCache.delete(k)
+    while (authCache.size >= AUTH_CACHE_MAX) authCache.delete(authCache.keys().next().value)
+  }
+  authCache.set(key, { staff, exp: now + AUTH_CACHE_TTL_MS })
+}
+
+function authCacheClear() {
+  authCache.clear()
+}
+
+/** 带缓存的登录校验 */
+function loginCheckCached(username, password) {
+  const user = String(username ?? '').trim()
+  const pass = String(password ?? '')
+  if (!user || !pass) return null
+  const key = authCacheKey(user, pass)
+  const hit = authCacheGet(key)
+  if (hit) return { ...hit }
+  const staff = loginCheck(user, pass)
+  if (staff) authCacheSet(key, staff)
+  return staff
+}
+
+/** /notices* /roster /staff /me 的鉴权：账号名 + 密码（x-counselor-user + x-counselor-key）。
+    通过的请求挂 req.staff = { id, name, role, parent_id, username }，供 scopeOf 与留痕用。
+    失败计入限速。旧路径只给 x-counselor-key 时按总管密码处理，保证老前端/老脚本不改也能用。 */
 function requireCounselor(req, res, next) {
   const ip = String(req.ip || req.socket?.remoteAddress || '?')
   const remain = authBlockRemain(ip)
@@ -120,39 +217,49 @@ function requireCounselor(req, res, next) {
     return fail(res, 429, 'TOO_MANY_ATTEMPTS', `密码错误次数太多，请 ${Math.ceil(remain / 60)} 分钟后再试`)
   }
 
-  const key = String(req.get('x-counselor-key') || '')
-  const want = counselorKey()
-  const pathOnly = String(req.originalUrl || '').split('?')[0]
-  const queryKey = String(req.query?.k || '')
-  const queryAllowed = /\/export\.csv$/i.test(pathOnly)
-  const presented = key || (queryAllowed ? queryKey : '')
-
-  if (presented && safeEqual(presented, want)) {
-    authFails.delete(ip)
-    req.staff = { id: OWNER_ID, name: OWNER_NAME, role: 'owner', parent_id: null }
-    return next()
-  }
-
-  if (presented) {
-    const member = repo.getStaffByKey(presented)
-    // staff 表里那行 id='owner' 的隐藏配置不能当账号用（它的 access_key 从不下发）
-    if (member && member.role !== 'owner') {
-      authFails.delete(ip)
-      req.staff = {
-        id: member.id,
-        name: member.name,
-        role: member.role || 'assistant',
-        parent_id: member.parent_id || null
-      }
-      try {
-        repo.updateStaff(member.id, { last_seen_at: nowIso() })
-      } catch {}
-      return next()
+  // 浏览器不允许 HTTP 头里出现非 ASCII 字节，中文账号名由前端 encodeURIComponent 后放进来 → 这里容错解码。
+  // 已经是明文（老脚本 / 纯 ASCII 账号名）时 decodeURIComponent 不改变内容；遇到畸形的 % 就原样用。
+  const rawUser = String(req.get('x-counselor-user') || '').trim()
+  let user = rawUser
+  if (rawUser) {
+    try {
+      user = decodeURIComponent(rawUser)
+    } catch {
+      user = rawUser
     }
   }
+  const key = String(req.get('x-counselor-key') || '')
+  const pathOnly = String(req.originalUrl || '').split('?')[0]
+  const queryKey = String(req.query?.k || '')
+  const queryUser = String(req.query?.u || '').trim() // 导出链接用（<a href> 发不出请求头）
+  const queryAllowed = /\/export\.csv$/i.test(pathOnly)
 
-  authNoteFail(ip)
-  return fail(res, 401, 'UNAUTHORIZED', '访问密码不对，请重新输入。')
+  let staff = null
+  if (user) {
+    // 新路径：账号名 + 密码（密码仍在 x-counselor-key 里，只是含义变成「密码」）
+    staff = loginCheckCached(user, key)
+  } else if (queryAllowed && queryUser) {
+    // 导出 CSV：只能走 query，?u= 账号名 & k= 密码（Express 已经对 query 做过一次解码）
+    staff = loginCheckCached(queryUser, queryKey)
+  } else {
+    // 旧路径：只有 x-counselor-key（导出的 ?k= 同理），当作总管密码
+    const presented = key || (queryAllowed ? queryKey : '')
+    if (presented && safeEqual(presented, counselorKey())) staff = ownerSession()
+  }
+
+  if (!staff) {
+    authNoteFail(ip)
+    return fail(res, 401, 'UNAUTHORIZED', '账号或密码不对')
+  }
+
+  authFails.delete(ip)
+  req.staff = staff
+  if (staff.role !== 'owner') {
+    try {
+      repo.updateStaff(staff.id, { last_seen_at: nowIso() })
+    } catch {}
+  }
+  return next()
 }
 
 /** 数据可见范围：owner → null（全部）；counselor → 自己；assistant → 所属辅导员。
@@ -707,9 +814,7 @@ export function createApiRouter() {
   r.use('/roster', requireCounselor)
   r.use('/me', requireCounselor)
   r.use('/settings', requireCounselor, requireOwner)
-  r.use('/auth', requireCounselor, requireOwner)
-  // 账号管理按角色分级（owner 管 counselor，counselor 管自己的 assistant），
-  // 所以这里只做登录校验，具体权限在每个路由里判。
+  // /auth 不再整体挂鉴权：/auth/login 必须公开；/auth/change-key 在路由上单独挂 requireCounselor + requireOwner
   r.use('/staff', requireCounselor)
 
   /* ---------------- 设置：访问密码 / AI 配置（改完立即生效，不用重启） ---------------- */
@@ -798,14 +903,55 @@ export function createApiRouter() {
     wrap(async (req, res) => res.json(await testAi()))
   )
 
+  /* ---------------- 登录：账号名 + 密码（唯一的公开写接口） ---------------- */
+
+  /** 登录成功后前端把 username 放进 x-counselor-user、password 放进 x-counselor-key。
+      这里和鉴权中间件吃同一套限速计数：错 10 次锁 5 分钟。 */
+  r.post(
+    '/auth/login',
+    wrap((req, res) => {
+      const ip = String(req.ip || req.socket?.remoteAddress || '?')
+      const remain = authBlockRemain(ip)
+      if (remain > 0) {
+        res.setHeader('Retry-After', String(remain))
+        return fail(res, 429, 'TOO_MANY_ATTEMPTS', `密码错误次数太多，请 ${Math.ceil(remain / 60)} 分钟后再试`)
+      }
+
+      const username = str(req.body?.username).trim()
+      const password = String(req.body?.password ?? '')
+      if (!username || !password) {
+        return fail(res, 400, 'INVALID_BODY', '账号名和密码都要填')
+      }
+
+      const staff = loginCheckCached(username, password)
+      if (!staff) {
+        authNoteFail(ip)
+        return fail(res, 401, 'UNAUTHORIZED', '账号或密码不对')
+      }
+
+      authFails.delete(ip)
+      if (staff.role !== 'owner') {
+        try {
+          repo.updateStaff(staff.id, { last_seen_at: nowIso() })
+        } catch {}
+      }
+      console.log(`[auth] ${staff.username}（${staff.role}）登录成功`)
+      res.json({ ok: true, staff })
+    })
+  )
+
+  /** 总管改自己的密码（只有 owner 能进；staff 账号的密码由账号管理重置） */
   r.post(
     '/auth/change-key',
+    requireCounselor,
+    requireOwner,
     wrap((req, res) => {
       const cur = String(req.body?.current ?? '')
       const next = String(req.body?.next ?? '').trim()
-      if (cur !== counselorKey()) return fail(res, 401, 'UNAUTHORIZED', '访问密码不对，请重新输入。')
+      if (!safeEqual(cur, counselorKey())) return fail(res, 401, 'UNAUTHORIZED', '访问密码不对，请重新输入。')
       if (next.length < 6) return fail(res, 400, 'WEAK_KEY', '新密码至少 6 位')
       setSetting('counselor_key', next)
+      authCacheClear() // 缓存里还留着旧密码的那条，清掉
       console.log('[settings] 访问密码已更新')
       res.json({ ok: true })
     })
@@ -824,7 +970,7 @@ export function createApiRouter() {
   /** staff 表里 id='owner' 的隐藏行：只存总管自己的发件邮箱，不参与账号列表 */
   const ownerEmailRow = () => repo.getStaff(OWNER_ID)
 
-  /** 配邮箱时按需建这行；access_key 是随机串且从不下发，所以不能当账号登录 */
+  /** 配邮箱时按需建这行；username/pwd_* 都留空，所以它不是登录账号（owner 只走环境变量密码） */
   const ensureEmailRow = (staff) => {
     if (staff.role !== 'owner') return repo.getStaff(staff.id)
     const existed = ownerEmailRow()
@@ -833,23 +979,74 @@ export function createApiRouter() {
       id: OWNER_ID,
       name: OWNER_NAME,
       role: 'owner',
-      access_key: randomBytes(24).toString('hex'),
       parent_id: null
     })
   }
 
-  /** 发件邮箱视图：没绑定时什么都不透露 */
+  /** SMTP 用户名脱敏：notice@x.edu.cn → n***@x.edu.cn；非邮箱形态只留首字 */
+  const maskUser = (name) => {
+    const s = str(name).trim()
+    if (!s) return ''
+    const at = s.lastIndexOf('@')
+    if (at > 0) return `${s.slice(0, 1)}***${s.slice(at)}`
+    return `${s.slice(0, 1)}***`
+  }
+
+  /* 发件凭据统一放在 staff.email_api_key 里（v1. 密文），明文是一段 JSON：
+   * { host, port, secure, user, pass, resendKey }
+   *  - smtp   → 用 host/port/secure/user/pass，resendKey 为 null；
+   *  - resend → 用 resendKey，其余字段为 null。
+   * 老库的 email_api_key 直接存的是 Resend API Key（不是 JSON），这里兼容读出。 */
+  const mailConfigOf = (row) => {
+    const empty = { host: '', port: null, secure: false, user: '', pass: '', resendKey: '' }
+    const plain = decryptSecret(row?.email_api_key)
+    if (!plain) return empty
+    try {
+      const obj = JSON.parse(plain)
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        const port = Number(obj.port) > 0 ? Math.round(Number(obj.port)) : null
+        return {
+          host: str(obj.host).trim(),
+          port,
+          secure: port === 465 || obj.secure === true,
+          user: str(obj.user).trim(),
+          pass: String(obj.pass ?? ''),
+          resendKey: str(obj.resendKey).trim()
+        }
+      }
+    } catch {}
+    // 老库：裸的 Resend API Key
+    return { ...empty, resendKey: String(plain).trim() }
+  }
+
+  /** SMTP 对外视图：只给主机 / 端口 / 加密方式 / 掩码用户名，永远不含密码 */
+  const smtpView = (cfg) =>
+    cfg && cfg.host
+      ? {
+          host: cfg.host,
+          port: cfg.port,
+          secure: Boolean(cfg.secure),
+          user_masked: maskUser(cfg.user)
+        }
+      : null
+
+  /** 发件邮箱视图：没绑定时什么都不透露；配了但凭据解不出来时 broke=true（让上层给准确提示） */
   const emailView = (row) => {
     const address = str(row?.email).trim()
-    const provider = str(row?.email_provider).trim().toLowerCase() || null
-    const bound =
-      Boolean(address) && (provider === 'log' || (provider === 'resend' && Boolean(row?.email_api_key)))
+    const provider = str(row?.email_provider).trim().toLowerCase()
+    const known = provider === 'smtp' || provider === 'resend'
+    const cfg = known && address ? mailConfigOf(row) : null
+    const usable = Boolean(cfg) && (provider === 'smtp' ? Boolean(cfg.host) : Boolean(cfg.resendKey))
+    const bound = Boolean(address) && known && usable
     const from = str(row?.email_from).trim()
     return {
       bound,
+      address: bound ? maskEmail(address) : '',
       address_masked: bound ? maskEmail(address) : '',
       provider: bound ? provider : null,
-      from: from || (bound ? address : '')
+      from: from || (bound ? address : ''),
+      smtp: bound && provider === 'smtp' ? smtpView(cfg) : null,
+      broke: Boolean(address) && known && !usable
     }
   }
 
@@ -862,6 +1059,7 @@ export function createApiRouter() {
       res.json({
         id: me.id,
         name: me.name,
+        username: me.username || (me.role === 'owner' ? OWNER_USERNAME : null),
         role: me.role,
         parent_id: me.parent_id || null,
         // 调用者能创建哪种账号：owner → counselor，counselor → assistant，assistant → 无
@@ -874,24 +1072,36 @@ export function createApiRouter() {
 
   /* ---------------- 账号管理：owner 管辅导员，辅导员管自己的助理 ---------------- */
 
-  const newKey = () => randomBytes(6).toString('hex')
-  const maskStaffKey = (k) => {
-    const s = String(k || '')
-    return s.length <= 6 ? '••••••' : `${s.slice(0, 3)}…${s.slice(-3)}`
-  }
+  /* 账号密码不再由服务端随机生成（一次性明文口令已取消）：
+     新建/重置统一用 DEFAULT_STAFF_PASSWORD，创建者可提示本人登录后自行修改。 */
 
-  /** 账号对外视图：永远不含 access_key 明文与邮箱 API Key */
+  /** 账号对外视图：永远不含 access_key 明文、密码派生值与邮箱凭据 */
   const memberView = (s, assistantCount = 0) => ({
     id: s.id,
     name: s.name,
+    username: s.username || null,
     role: s.role,
     active: Number(s.active) === 1,
     created_at: s.created_at,
     last_seen_at: s.last_seen_at,
-    key_masked: maskStaffKey(s.access_key),
+    // 旧前端的「密码」一列：只给固定掩码（密码已经存在库里，但永远不回明文）
+    key_masked: '••••••',
     parent_id: s.parent_id || null,
     assistant_count: Number(assistantCount) || 0
   })
+
+  /** 账号名规则：允许中文与空格（姓名兜底时会有），只去掉控制字符、限长 32；'owner' 是总管保留名 */
+  const cleanUsername = (raw) =>
+    String(raw ?? '')
+      .trim()
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+
+  const usernameProblem = (username) => {
+    if (!username) return '给账号起个账号名（登录用，可以中文）'
+    if (username.length > 32) return '账号名太长了（最多 32 个字）'
+    if (username.toLowerCase() === OWNER_USERNAME) return '「owner」是总管保留的账号名'
+    return null
+  }
 
   r.get(
     '/staff',
@@ -926,19 +1136,50 @@ export function createApiRouter() {
       if (!name) return fail(res, 400, 'INVALID_BODY', '给账号起个名字')
       if (name.length > 24) return fail(res, 400, 'INVALID_BODY', '名字太长了')
 
+      // 账号名由调用者给（允许中文，如「王辅导员」）；老前端只传 name，就拿姓名当账号名
+      const username = cleanUsername(req.body?.username) || name
+      const bad = usernameProblem(username)
+      if (bad) return fail(res, 400, 'INVALID_BODY', bad)
+      if (repo.getStaffByUsername(username)) {
+        return fail(res, 400, 'USERNAME_TAKEN', `账号名「${username}」已经被用了，换一个`)
+      }
+
       // 角色由调用者决定：总管建辅导员（parent_id = NULL），辅导员建自己的助理
       const role = me.role === 'owner' ? 'counselor' : 'assistant'
-      const key = newKey()
-      const row = repo.createStaff({
-        name,
-        access_key: key,
-        role,
-        parent_id: role === 'assistant' ? me.id : null
-      })
-      console.log(`[staff] ${me.name} 创建了${role === 'counselor' ? '辅导员' : '助理'}「${name}」`)
-      // 明文 access_key 只在这里返回一次；staff 是旧前端的别名
+      // 密码不发给调用者指定：一律默认 123456，由本人登录后自行修改
+      const { hash, salt } = hashPassword(DEFAULT_STAFF_PASSWORD)
+      let row
+      try {
+        row = repo.createStaff({
+          name,
+          username,
+          pwd_hash: hash,
+          pwd_salt: salt,
+          role,
+          parent_id: role === 'assistant' ? me.id : null
+        })
+      } catch (e) {
+        // 并发建同名账号时靠 username 的唯一索引兜底
+        if (/UNIQUE/i.test(String(e?.message || ''))) {
+          return fail(res, 400, 'USERNAME_TAKEN', `账号名「${username}」已经被用了，换一个`)
+        }
+        throw e
+      }
+
+      console.log(
+        `[staff] ${me.name} 创建了${role === 'counselor' ? '辅导员' : '助理'}「${name}」（账号 ${username}，初始密码为默认值）`
+      )
       const view = memberView(row, 0)
-      res.json({ ok: true, member: view, staff: view, access_key: key })
+      res.json({
+        ok: true,
+        member: view,
+        staff: view, // 旧前端的别名
+        username: row.username,
+        // 初始密码就是固定默认值；不再由服务端生成一次性口令
+        default_password: DEFAULT_STAFF_PASSWORD,
+        access_key: DEFAULT_STAFF_PASSWORD, // 旧前端字段别名（值＝默认密码，不是口令凭据）
+        hint: `账号 ${row.username} 的初始密码是 ${DEFAULT_STAFF_PASSWORD}，请提醒本人登录后自行修改`
+      })
     })
   )
 
@@ -966,17 +1207,25 @@ export function createApiRouter() {
         }
         patch.active = active
       }
-      let accessKey = null
-      if (req.body?.regenerate) {
-        accessKey = newKey()
-        patch.access_key = accessKey
+
+      // 重置密码：只有「恢复成默认 123456」这一种（旧字段 regenerate 是同一个意思，保留兼容）
+      const resetPassword = Boolean(req.body?.regenerate || req.body?.reset_password)
+      if (resetPassword) {
+        const { hash, salt } = hashPassword(DEFAULT_STAFF_PASSWORD)
+        patch.pwd_hash = hash
+        patch.pwd_salt = salt
       }
 
       const next = repo.updateStaff(row.id, patch)
-      console.log(`[staff] ${me.name} 改动了账号「${row.name}」`)
+      if (resetPassword || patch.active === false) authCacheClear() // 旧密码/旧登录态立刻失效
+      console.log(`[staff] ${me.name} 改动了账号「${row.name}」${resetPassword ? '（密码已重置为默认值）' : ''}`)
       const view = memberView(next, 0)
       const out = { ok: true, member: view, staff: view } // staff 是旧前端的别名
-      if (accessKey) out.access_key = accessKey // 明文只在新生成时返回一次
+      if (resetPassword) {
+        out.default_password = DEFAULT_STAFF_PASSWORD
+        out.access_key = DEFAULT_STAFF_PASSWORD // 旧前端字段别名
+        out.hint = `账号 ${next.username || row.name} 的密码已重置为 ${DEFAULT_STAFF_PASSWORD}，请提醒本人登录后修改`
+      }
       res.json(out)
     })
   )
@@ -993,10 +1242,46 @@ export function createApiRouter() {
       if (String(row.id) === String(me.id)) return fail(res, 403, 'FORBIDDEN', '不能删除自己的账号。')
 
       const removed = repo.deleteStaff(row.id)
+      authCacheClear() // 删掉的账号不能再靠缓存里的登录态进来
       console.log(
         `[staff] ${me.name} 删除了账号「${row.name}」，连带助理 ${removed?.assistants ?? 0} 个 / 学生 ${removed?.students ?? 0} 人回到未分配`
       )
       res.json({ ok: true, removed: removed || { assistants: 0, students: 0 } })
+    })
+  )
+
+  /* ---------------- 修改自己的密码（默认 123456 的账号在这里改成自己的） ---------------- */
+
+  r.patch(
+    '/staff/me/password',
+    wrap((req, res) => {
+      const me = req.staff
+      const current = String(req.body?.current ?? '')
+      const next = String(req.body?.next ?? '').trim()
+      if (!next) return fail(res, 400, 'INVALID_BODY', '新密码不能为空')
+      if (next.length < 6) return fail(res, 400, 'WEAK_KEY', '新密码至少 6 位')
+
+      // 总管改的是 COUNSELOR_KEY（落 settings 表，立即生效），其余账号改的是自己那行的 scrypt 值
+      if (me.role === 'owner') {
+        if (!safeEqual(current, counselorKey())) return fail(res, 401, 'UNAUTHORIZED', '当前密码不对')
+        setSetting('counselor_key', next)
+        authCacheClear()
+        console.log('[auth] 总管密码已更新')
+        return res.json({ ok: true, username: me.username || OWNER_USERNAME })
+      }
+
+      if (next === DEFAULT_STAFF_PASSWORD) {
+        return fail(res, 400, 'WEAK_KEY', `新密码不能还是默认的 ${DEFAULT_STAFF_PASSWORD}`)
+      }
+      const row = repo.getStaff(me.id)
+      if (!row || !verifyPassword(current, row.pwd_hash, row.pwd_salt)) {
+        return fail(res, 401, 'UNAUTHORIZED', '当前密码不对')
+      }
+      const { hash, salt } = hashPassword(next)
+      repo.updateStaff(row.id, { pwd_hash: hash, pwd_salt: salt })
+      authCacheClear() // 旧密码缓存出来的登录态立刻作废
+      console.log(`[auth] ${row.username || row.name} 修改了自己的密码`)
+      res.json({ ok: true, username: row.username || null })
     })
   )
 
@@ -1006,7 +1291,15 @@ export function createApiRouter() {
     '/staff/me/email',
     wrap((req, res) => {
       const row = req.staff.role === 'owner' ? ownerEmailRow() : repo.getStaff(req.staff.id)
-      res.json(emailView(row))
+      const v = emailView(row)
+      // 对外只回掩码：没有 pass，也没有完整 username
+      res.json({
+        bound: v.bound,
+        address: v.address,
+        provider: v.provider,
+        from: v.from,
+        smtp: v.smtp
+      })
     })
   )
 
@@ -1015,24 +1308,65 @@ export function createApiRouter() {
     wrap((req, res) => {
       const body = req.body || {}
       const email = str(body.email).trim()
-      const provider = str(body.provider).trim().toLowerCase() || 'resend'
+      const provider = str(body.provider).trim().toLowerCase() || 'smtp'
       if (!EMAIL_RE.test(email)) {
         return fail(res, 400, 'INVALID_BODY', '邮箱格式不对，例如 name@university.edu')
       }
-      if (!['resend', 'log'].includes(provider)) {
-        return fail(res, 400, 'INVALID_BODY', 'provider 只能是 resend（真发）或 log（只写日志）')
+      if (!['smtp', 'resend'].includes(provider)) {
+        return fail(res, 400, 'INVALID_BODY', 'provider 只能是 smtp（学校服务器）或 resend（Railway）')
       }
 
       const row = ensureEmailRow(req.staff)
       if (!row) return fail(res, 500, 'INTERNAL', '账号配置行创建失败，请稍后重试')
 
-      const apiKeyRaw = str(body.api_key).trim()
+      const prev = mailConfigOf(row)
       const patch = { email, email_provider: provider }
       if (body.from !== undefined) patch.email_from = str(body.from).trim() || null
-      // API Key 落库前加密；传空字符串表示「不改动已经存好的那把」
-      if (apiKeyRaw) patch.email_api_key = encryptSecret(apiKeyRaw)
-      if (provider === 'resend' && !patch.email_api_key && !row.email_api_key) {
-        return fail(res, 400, 'INVALID_BODY', 'provider=resend 需要 api_key（在 Resend 后台生成）')
+
+      if (provider === 'smtp') {
+        const s = body.smtp && typeof body.smtp === 'object' ? body.smtp : {}
+        const host = str(s.host).trim() || prev.host
+        const portRaw = Number(s.port)
+        const port = Number.isFinite(portRaw) && portRaw > 0 ? Math.round(portRaw) : prev.port || 587
+        if (!host) {
+          return fail(res, 400, 'INVALID_BODY', 'SMTP 需要服务器地址，例如 smtp.university.edu.cn')
+        }
+        if (port < 1 || port > 65535) {
+          return fail(res, 400, 'INVALID_BODY', 'SMTP 端口不对（465 直连 SSL / 587 STARTTLS）')
+        }
+        const user = str(s.user).trim() || prev.user
+        // 密码留空＝不改已保存的那份；首次配置或换用户名时必须填
+        const passGiven = s.pass !== undefined && s.pass !== null && String(s.pass) !== ''
+        const pass = passGiven ? String(s.pass) : prev.pass
+        if (user && !pass) {
+          return fail(res, 400, 'INVALID_BODY', 'SMTP 需要密码或授权码（留空表示不改已保存的那份）')
+        }
+        patch.email_api_key = encryptSecret(
+          JSON.stringify({
+            host,
+            port,
+            secure: port === 465, // 加密方式只由端口决定：465=true，587=false
+            user,
+            pass,
+            resendKey: null
+          })
+        )
+      } else {
+        // Resend：api_key 留空＝沿用已保存的那把
+        const apiKey = str(body.api_key).trim() || prev.resendKey
+        if (!apiKey) {
+          return fail(res, 400, 'INVALID_BODY', 'provider=resend 需要 api_key（在 Resend 后台生成）')
+        }
+        patch.email_api_key = encryptSecret(
+          JSON.stringify({
+            host: null,
+            port: null,
+            secure: false,
+            user: null,
+            pass: null,
+            resendKey: apiKey
+          })
+        )
       }
 
       repo.updateStaff(row.id, patch)
@@ -1090,6 +1424,8 @@ export function createApiRouter() {
         continue
       }
       seen.add(sid)
+      // 学号能解析出学历/年级就先补上；手填的优先，手填错了由 /roster/check 指出来
+      const inferred = parseStudentId(sid)
       out.push({
         student_id: sid,
         name: str(r?.name).trim() || sid,
@@ -1100,8 +1436,8 @@ export function createApiRouter() {
         // v2 新增的花名册字段：缺了留 null，由 /roster/check 把缺口报出来，不在这里拦截
         nationality: str(r?.nationality).trim() || null,
         email: str(r?.email).trim() || null,
-        degree: str(r?.degree).trim() || null,
-        grade: str(r?.grade).trim() || null
+        degree: str(r?.degree).trim() || inferred?.degree || null,
+        grade: str(r?.grade).trim() || inferred?.grade || null
       })
     }
     return { rows: out, bad, dup }
@@ -1833,15 +2169,29 @@ export function createApiRouter() {
       const row = me.role === 'owner' ? ownerEmailRow() : repo.getStaff(me.id)
       const mail = emailView(row)
       if (!mail.bound) {
+        if (mail.broke) {
+          return fail(
+            res,
+            400,
+            'EMAIL_NOT_BOUND',
+            '发件邮箱凭据读不出来（SECRET_KEY 换过？），请到「我的邮箱」里重新填写'
+          )
+        }
         return fail(
           res,
           400,
           'EMAIL_NOT_BOUND',
-          '还没有绑定发件邮箱：先在「我的邮箱」里填发件地址与邮件通道（resend 需要 API Key）'
+          '还没有绑定发件邮箱：先在「我的邮箱」里填发件地址与邮件通道（SMTP 需要主机 / 用户名 / 密码，Resend 需要 API Key）'
         )
       }
       const provider = mail.provider
-      const apiKey = provider === 'resend' ? decryptSecret(row?.email_api_key) : null
+      const cfg = mailConfigOf(row)
+      // 按通道分派：SMTP 直接把主机/端口/账号/密码交给 nodemailer；Resend 只给 API Key
+      const config =
+        provider === 'smtp'
+          ? { host: cfg.host, port: cfg.port, secure: cfg.secure, user: cfg.user, pass: cfg.pass }
+          : null
+      const apiKey = provider === 'resend' ? cfg.resendKey : null
       if (provider === 'resend' && !apiKey) {
         return fail(
           res,
@@ -1877,7 +2227,7 @@ export function createApiRouter() {
         seen.add(dedupe)
 
         try {
-          await sendMail({ provider, apiKey, from, to, ...buildMail(notice, student, link) })
+          await sendMail({ provider, config, apiKey, from, to, ...buildMail(notice, student, link) })
           sent++
         } catch (e) {
           // 单人失败只记下来，继续发下一个
@@ -1903,18 +2253,27 @@ export function createApiRouter() {
     })
   )
 
-  /** 名单（v2：关键词 / 学历 / 年级 / 语言 / 班级 过滤，永远只在自己可见范围内） */
+  /** 名单（v2：关键词 / 学历 / 年级 / 语言 / 班级 过滤，永远只在自己可见范围内）。
+      每行额外带 id_degree / id_grade：学号推断值，前端用它和手填值对比、提示「与学号不一致」。 */
   r.get(
     '/roster',
     wrap((req, res) => {
       const scope = scopeOf(req)
-      const students = repo.listStudents({
+      const rows = repo.listStudents({
         scope,
         q: req.query.q,
         degree: req.query.degree,
         grade: req.query.grade,
         lang: req.query.lang,
         class_no: req.query.class_no
+      })
+      const students = rows.map((s) => {
+        const inferred = parseStudentId(s.student_id)
+        return {
+          ...s,
+          id_degree: inferred?.degree || null,
+          id_grade: inferred?.grade || null
+        }
       })
       res.json({
         roster: students, // 旧前端的别名，别让老页面白屏
@@ -1957,16 +2316,30 @@ export function createApiRouter() {
           push('email', 'warn', `${who} 的邮箱 ${email} 和别的同学重复，通知可能发错人`)
         }
 
+        // 学号推断：8 位数字 + 第 1 位 1/2/5，能推断出学历与年级
+        const inferred = parseStudentId(s.student_id)
+        if (!inferred) {
+          push(
+            'student_id',
+            'warn',
+            `${who} 的学号「${s.student_id}」不是 8 位数字（第 1 位应为 1=博士 / 2=硕士 / 5=本科），推断不出学历与年级`
+          )
+        }
+
         const degree = str(s.degree).trim()
         if (!degree) push('degree', 'warn', `${who} 的学历信息缺失`)
         else if (!DEGREES.includes(degree)) {
           push('degree', 'warn', `${who} 的学历「${degree}」不在 本科/硕士/博士 里`)
+        } else if (inferred && degree !== inferred.degree) {
+          push('degree', 'warn', `${who} 手填学历「${degree}」与学号推断出的「${inferred.degree}」不一致，请核对`)
         }
 
         const grade = str(s.grade).trim()
         if (!grade) push('grade', 'warn', `${who} 的年级信息缺失`)
         else if (!GRADE_RE.test(grade)) {
           push('grade', 'warn', `${who} 的年级「${grade}」不是 20xx级 的形式`)
+        } else if (inferred && grade !== inferred.grade) {
+          push('grade', 'warn', `${who} 手填年级「${grade}」与学号推断出的「${inferred.grade}」不一致，请核对`)
         }
 
         if (!str(s.nationality).trim()) push('nationality', 'info', `${who} 的国籍信息缺失`)

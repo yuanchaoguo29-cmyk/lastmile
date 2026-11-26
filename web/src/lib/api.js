@@ -1,6 +1,7 @@
 /* 全站唯一的数据通道 —— 冻结。页面不要直接 fetch。 */
 
 const KEY = 'lm.counselor_key'
+const USER = 'lm.counselor_user'
 const SID = 'lm.student_id'
 const NAME = 'lm.student_name'
 const LANG = 'lm.lang'
@@ -27,6 +28,19 @@ export function setCounselorKey(v) {
   }
   ls(KEY, v)
 }
+/* 当前账号名（中文可能）：和密码一起存，请求时通过 x-counselor-user 带给服务端 */
+export function getCounselorUser() {
+  return ls(USER) || ''
+}
+export function setCounselorUser(v) {
+  if (!v) {
+    try {
+      localStorage.removeItem(USER)
+    } catch {}
+    return
+  }
+  ls(USER, v)
+}
 export function getStudentId() {
   return ls(SID) || ''
 }
@@ -46,10 +60,24 @@ export function setLang(v) {
   ls(LANG, v)
 }
 
+/* 用户名可能是中文，而 HTTP 头只允许 ASCII：统一 percent-encode 后再发，
+   服务端用 decodeURIComponent 还原。空用户名就不发这个头。 */
+function userHeader(v) {
+  try {
+    return encodeURIComponent(String(v || '').trim())
+  } catch {
+    return ''
+  }
+}
+
 async function req(path, { method = 'GET', body, counselor = false } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
-  if (counselor) headers['x-counselor-key'] = getCounselorKey()
+  if (counselor) {
+    headers['x-counselor-key'] = getCounselorKey()
+    const user = userHeader(getCounselorUser())
+    if (user) headers['x-counselor-user'] = user
+  }
 
   let res
   try {
@@ -72,10 +100,24 @@ async function req(path, { method = 'GET', body, counselor = false } = {}) {
     }
   }
   if (!res.ok) {
-    throw new Error(data?.error?.message || `HTTP ${res.status}`)
+    /* 带上状态码与业务码：登录页要把 401 翻成「账号或密码不对」，429 原样显示 */
+    const err = new Error(data?.error?.message || `HTTP ${res.status}`)
+    err.status = res.status
+    err.code = data?.error?.code || ''
+    throw err
   }
   return data
 }
+
+/* ---------- 登录 ---------- */
+
+/** 账号 + 密码登录。成功返回身份；401 表示账号或密码不对。
+    这里不带 x-counselor-key：登录前手里可能还留着上一次的旧密码。 */
+export const login = (username, password) =>
+  req('/api/auth/login', {
+    method: 'POST',
+    body: { username: String(username || '').trim(), password: String(password ?? '') }
+  })
 
 /* ---------- 辅导员 ---------- */
 
@@ -102,7 +144,12 @@ export const getDashboard = (id) => req(`/api/notices/${id}/dashboard`, { counse
 export const buildNudge = (id, payload) =>
   req(`/api/notices/${id}/nudge`, { method: 'POST', body: payload, counselor: true })
 
-export const exportCsvUrl = (id) => `/api/notices/${id}/export.csv?k=${encodeURIComponent(getCounselorKey())}`
+export const exportCsvUrl = (id) => {
+  /* 导出走 <a href> 下载，发不了请求头，所以账号也放进 query */
+  const q = new URLSearchParams({ k: getCounselorKey() })
+  if (getCounselorUser()) q.set('u', getCounselorUser())
+  return `/api/notices/${id}/export.csv?${q.toString()}`
+}
 
 export const getRoster = (query) => {
   const q = new URLSearchParams()
@@ -120,7 +167,12 @@ export const checkRoster = () => req('/api/roster/check', { method: 'POST', body
 
 export const getMe = () => req('/api/me', { counselor: true })
 export const listStaff = () => req('/api/staff', { counselor: true })
-export const createStaff = (name) => req('/api/staff', { method: 'POST', body: { name }, counselor: true })
+/* 建号：用户名就是账号（允许中文），初始密码由服务端固定为 123456。
+   name 一并传，兼容只认 name 的老后端；服务端各取所需。 */
+export const createStaff = (username) => {
+  const u = String(username || '').trim()
+  return req('/api/staff', { method: 'POST', body: { username: u, name: u }, counselor: true })
+}
 export const updateStaff = (id, patch) =>
   req(`/api/staff/${id}`, { method: 'PATCH', body: patch, counselor: true })
 export const deleteStaff = (id) => req(`/api/staff/${id}`, { method: 'DELETE', counselor: true })
@@ -148,9 +200,21 @@ export const updateSettings = (patch) =>
 
 export const testAiConnection = () => req('/api/settings/test', { method: 'POST', counselor: true })
 
-/** 改访问密码：成功后把本机存的密码换成新的，用户不会掉线 */
-export async function changeCounselorKey(current, next) {
-  const out = await req('/api/auth/change-key', { method: 'POST', body: { current, next }, counselor: true })
+/** 改密码：总管仍走 /api/auth/change-key；辅导员 / 助理改自己的走 PATCH /api/staff/me/password。
+    成功后把本机存的密码换成新的，用户不会掉线。
+    isOwner 不传时按本机存的用户名兜底（总管账号固定叫 owner）。 */
+export async function changeCounselorKey(current, next, isOwner) {
+  const owner =
+    typeof isOwner === 'boolean'
+      ? isOwner
+      : getCounselorUser().trim().toLowerCase() === 'owner'
+  const out = owner
+    ? await req('/api/auth/change-key', { method: 'POST', body: { current, next }, counselor: true })
+    : await req('/api/staff/me/password', {
+        method: 'PATCH',
+        body: { current, next },
+        counselor: true
+      })
   setCounselorKey(next)
   return out
 }

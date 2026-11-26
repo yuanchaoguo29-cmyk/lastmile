@@ -38,13 +38,17 @@ CREATE TABLE IF NOT EXISTS students (
   owner_staff_id TEXT                            -- 哪个辅导员/助理导入并负责
 );
 
--- owner = 总管（密码来自 COUNSELOR_KEY）
+-- owner = 总管（username 固定 'owner'，密码来自环境变量 COUNSELOR_KEY，不落这张表）
 -- counselor = 辅导员（只看自己名下的学生与通知）
 -- assistant = 助理（与所属辅导员同权，但只能由辅导员创建/删除）
+-- 登录走 POST /api/auth/login { username, password }；密码只存 scrypt 派生结果 + 盐。
 CREATE TABLE IF NOT EXISTS staff (
   id             TEXT PRIMARY KEY,
   name           TEXT NOT NULL,
-  access_key     TEXT NOT NULL,
+  username       TEXT,                           -- 登录账号名（允许中文），唯一
+  pwd_hash       TEXT,                           -- scrypt(password, pwd_salt) 的 hex
+  pwd_salt       TEXT,                           -- 16 字节随机盐的 hex
+  access_key     TEXT NOT NULL DEFAULT '',       -- 旧版访问口令：保留只为兼容旧数据，不再参与登录
   role           TEXT NOT NULL DEFAULT 'assistant',
   active         INTEGER NOT NULL DEFAULT 1,
   created_at     TEXT NOT NULL,
@@ -111,3 +115,5 @@ CREATE INDEX IF NOT EXISTS idx_refusals_notice ON refusals(notice_id);
 CREATE INDEX IF NOT EXISTS idx_notices_status  ON notices(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_students_owner  ON students(owner_staff_id);
 CREATE INDEX IF NOT EXISTS idx_staff_parent    ON staff(parent_id);
+-- 账号名唯一（NULL 不算重复：owner 的邮箱配置行与老数据可以留空）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_username ON staff(username)

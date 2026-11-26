@@ -329,7 +329,7 @@
   margin: 0;
 }
 
-/* ---------- 6. 一次性密码（只显示这一次） ---------- */
+/* ---------- 6. 账号信息（新建后只显示这一次） ---------- */
 
 @keyframes lm-account-rise {
   from {
@@ -389,6 +389,22 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+/* 账号信息卡里两行：账号 / 初始密码 */
+.lm-account-secret-row + .lm-account-secret-row {
+  margin-top: 8px;
+}
+
+.lm-account-secret-k {
+  flex: 0 0 auto;
+  min-width: 3.4em;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  line-height: 1.6;
+  color: var(--amber);
+  opacity: 0.85;
 }
 
 .lm-account-secret-key {

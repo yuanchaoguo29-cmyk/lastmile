@@ -512,11 +512,12 @@ function rosterWithReceipts(noticeId, scope = null) {
 /* ---------- staff（辅导员 + 助理账号） ---------- */
 
 /** 全部账号（含 parent_id / 邮箱绑定信息）。给 owner 账号用的隐藏行也在这里返回，
-    权限过滤由 api 层按角色做（SQL 不该知道 HTTP 语义）。 */
+    权限过滤由 api 层按角色做（SQL 不该知道 HTTP 语义）。
+    注意：不返回 pwd_hash / pwd_salt —— 列表接口没有任何理由碰密码派生值。 */
 function listStaff() {
   return plainAll(
     q(
-      `SELECT id, name, role, active, created_at, last_seen_at, access_key,
+      `SELECT id, name, username, role, active, created_at, last_seen_at, access_key,
               parent_id, email, email_from, email_provider, email_api_key
          FROM staff ORDER BY created_at ASC`
     ).all()
@@ -528,24 +529,30 @@ function getStaff(id) {
   return plain(q('SELECT * FROM staff WHERE id = ?').get(String(id)))
 }
 
-function getStaffByKey(key) {
-  if (!key) return null
-  return plain(q('SELECT * FROM staff WHERE access_key = ? AND active = 1').get(String(key)))
+/** 按账号名取（含未启用的行：调用方自行判断 active，建号时也用它查重） */
+function getStaffByUsername(username) {
+  const u = String(username ?? '').trim()
+  if (!u) return null
+  return plain(q('SELECT * FROM staff WHERE username = ?').get(u))
 }
 
-/** 建账号。row 可含 id / name / access_key / role / active / created_at / parent_id /
-    email / email_from / email_provider / email_api_key */
+/** 建账号。row 可含 id / name / username / pwd_hash / pwd_salt / access_key / role / active /
+    created_at / parent_id / email / email_from / email_provider / email_api_key
+    access_key 只为兼容旧库的 NOT NULL 约束，默认写空串，不参与登录。 */
 function createStaffRow(row = {}) {
   const id = row.id || uid('stf')
   q(
     `INSERT INTO staff
-       (id, name, access_key, role, active, created_at, parent_id,
+       (id, name, username, pwd_hash, pwd_salt, access_key, role, active, created_at, parent_id,
         email, email_from, email_provider, email_api_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     String(row.name),
-    String(row.access_key),
+    nn(row.username),
+    nn(row.pwd_hash),
+    nn(row.pwd_salt),
+    String(row.access_key ?? ''),
     row.role || 'assistant',
     row.active === undefined ? 1 : row.active ? 1 : 0,
     row.created_at || nowIso(),
@@ -562,7 +569,18 @@ function updateStaffRow(id, patch = {}) {
   const sets = []
   const vals = []
   // 文本字段：null 表示清空（邮箱解绑），undefined 表示不动
-  for (const col of ['name', 'access_key', 'parent_id', 'email', 'email_from', 'email_provider', 'email_api_key']) {
+  for (const col of [
+    'name',
+    'username',
+    'pwd_hash',
+    'pwd_salt',
+    'access_key',
+    'parent_id',
+    'email',
+    'email_from',
+    'email_provider',
+    'email_api_key'
+  ]) {
     if (patch[col] === undefined) continue
     sets.push(`${col} = ?`)
     vals.push(patch[col] === null ? null : String(patch[col]))
@@ -769,7 +787,7 @@ export const repo = {
   // staff
   listStaff,
   getStaff,
-  getStaffByKey,
+  getStaffByUsername,
   createStaff: createStaffRow,
   updateStaff: updateStaffRow,
   deleteStaff: deleteStaffRow,

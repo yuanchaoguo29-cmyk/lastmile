@@ -1,6 +1,6 @@
 /* 账号管理面板：顶栏的独立入口用（与 SettingsPanel 分开，设置面板里那一段是同一套权限的另一处入口）。
-   覆盖式面板，外壳与设置面板一致；成员表 / 添加 / 一次性密码在这里独立实现，
-   不从 SettingsPanel 导出内部组件。
+   覆盖式面板，外壳与设置面板一致；成员表 / 添加 / 账号信息在这里独立实现，
+   不从 SettingsPanel 导出内部组件。新建时只填用户名，初始密码由服务端固定发 123456。
    权限：owner 管辅导员，counselor 管自己的助理，assistant 只读（can_create 为空就没有添加入口）。
    所有错误只在面板里显示成红字：不 alert、不白屏、不把用户踢回门口（confirm 除外）。 */
 
@@ -14,36 +14,39 @@ const EMPTY_MSG = { tone: '', text: '' }
 const ROLE_LABEL = { owner: '总管', counselor: '辅导员', assistant: '助理' }
 const ROLE_CODE = { owner: 'OWNER', counselor: 'COUNSELOR', assistant: 'ASSISTANT' }
 
+/* 新建账号的初始密码：服务端固定发这个，前端只负责告诉人，不让填 */
+const INITIAL_PASSWORD = '123456'
+
 const COPY = {
   owner: {
     memberEyebrow: 'MEMBERS · 辅导员',
-    memberDesc: '辅导员用各自的密码登录同一套工作台，学生、通知、回执都只在自己名下。',
+    memberDesc: '辅导员用自己的用户名和密码登录同一套工作台，学生、通知、回执都只在自己名下。',
     emptyTitle: '还没有辅导员。辅导员能自己导入学生、发通知，只能看到自己名下的。',
-    emptyHint: '建好后会显示一次密码，复制发给本人；之后这里只看得到掩码。',
+    emptyHint: '建好后会显示一次账号信息，复制发给本人；之后这里只看得到密码掩码。',
     addLabel: '添加辅导员',
     adding: '添加中…',
-    nameLabel: '辅导员姓名',
+    usernameLabel: '用户名',
     inputId: 'lm-account-name-owner',
     placeholder: '例如：李辅导员',
     countUnit: '位辅导员',
     nameTip: '辅导员',
     subKey: '助理',
-    delAsk: (n) => `删除辅导员「${n}」？删掉后这把密码立刻失效，他名下的学生和通知记录会留在系统里。`
+    delAsk: (n) => `删除辅导员「${n}」？删掉后这个账号立刻失效，他名下的学生和通知记录会留在系统里。`
   },
   counselor: {
     memberEyebrow: 'MEMBERS · 助理',
-    memberDesc: '助理用各自的密码登录同一套工作台，发通知和催办会记在各自名下。',
+    memberDesc: '助理用自己的用户名和密码登录同一套工作台，发通知和催办会记在各自名下。',
     emptyTitle: '还没有助理。助理能发通知、催办、导出回执，但改不了设置。',
-    emptyHint: '建好后会显示一次密码，复制发给本人；之后这里只看得到掩码。',
+    emptyHint: '建好后会显示一次账号信息，复制发给本人；之后这里只看得到密码掩码。',
     addLabel: '添加助理',
     adding: '添加中…',
-    nameLabel: '姓名',
+    usernameLabel: '用户名',
     inputId: 'lm-account-name-staff',
     placeholder: '例如：王助理',
     countUnit: '人',
     nameTip: '助理',
     subKey: '',
-    delAsk: (n) => `删除助理「${n}」？删掉后这把密码立刻失效，他发过的通知记录会留在系统里。`
+    delAsk: (n) => `删除助理「${n}」？删掉后这个账号立刻失效，他发过的通知记录会留在系统里。`
   },
   assistant: {
     memberEyebrow: 'MEMBERS · 成员',
@@ -52,7 +55,7 @@ const COPY = {
     emptyHint: '',
     addLabel: '',
     adding: '',
-    nameLabel: '',
+    usernameLabel: '',
     inputId: 'lm-account-name-none',
     placeholder: '',
     countUnit: '人',
@@ -64,11 +67,12 @@ const COPY = {
 
 /* ---------- 小工具 ---------- */
 
-/* 服务端一般给 key_masked；万一没给，本地兜一个，别把明文塞进列表 */
+/* 服务端一般给 key_masked；万一没给，本地兜一个，别把明文塞进列表。
+   初始密码 123456 这类短密码一律显示成圆点，跟服务端 maskStaffKey 的规则对齐 */
 function maskKey(key) {
   const s = String(key || '')
   if (!s) return ''
-  if (s.length <= 4) return '••••'
+  if (s.length <= 6) return '••••••'
   return `${s.slice(0, 4)}…${s.slice(-4)}`
 }
 
@@ -132,7 +136,7 @@ export default function AccountPanel({ open, onClose }) {
   const [rowsLoading, setRowsLoading] = useState(false)
 
   /* 新建 */
-  const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
   const [creating, setCreating] = useState(false)
 
   /* 行内操作防重：{ id, kind: 'toggle' | 'regen' | 'del' } */
@@ -140,7 +144,7 @@ export default function AccountPanel({ open, onClose }) {
   const [opErr, setOpErr] = useState('')
   const [opOk, setOpOk] = useState(EMPTY_MSG)
 
-  /* 一次性明文密码：{ id, name, key, role } */
+  /* 一次性账号信息：{ id, username, password } */
   const [secret, setSecret] = useState(null)
 
   const panelRef = useRef(null)
@@ -155,8 +159,8 @@ export default function AccountPanel({ open, onClose }) {
   const canCreate = canCreateOf(me)
   const students = studentCountOf(me)
   const blocked = creating || Boolean(busy)
-  const nm = name.trim()
-  const canAdd = canCreate && nm.length > 0 && !blocked
+  const um = username.trim()
+  const canAdd = canCreate && um.length > 0 && !blocked
 
   /* ---------- 读数据 ---------- */
 
@@ -216,7 +220,7 @@ export default function AccountPanel({ open, onClose }) {
     setLoaded(false)
     setRowsErr('')
     setRowsLoading(false)
-    setName('')
+    setUsername('')
     setCreating(false)
     setBusy(null)
     setOpErr('')
@@ -305,7 +309,10 @@ export default function AccountPanel({ open, onClose }) {
   function rowFrom(st, plainKey, fallbackName) {
     const row = { ...(st || {}) }
     if (plainKey) row.key_masked = maskKey(plainKey)
-    if (fallbackName && !row.name) row.name = fallbackName
+    if (fallbackName) {
+      if (!row.name) row.name = fallbackName
+      if (!row.username) row.username = fallbackName
+    }
     return row
   }
 
@@ -320,23 +327,25 @@ export default function AccountPanel({ open, onClose }) {
     setOpErr('')
     setOpOk(EMPTY_MSG)
     try {
-      const r = await createStaff(nm)
+      const r = await createStaff(um)
       const st = memberOf(r)
-      const key = String((r && r.access_key) || '')
-      if (!st || !st.id || !key) {
-        /* 建好了却没回密码：先刷新让人看到这一行，别让用户重复添加 */
-        setOpErr(`服务端没返回密码，${cfg.nameTip}可能已经建好：列表已刷新，请对他点一次「重置密码」`)
-        setName('')
+      /* 服务端把这一次的初始密码放在顶层 access_key；没回就按固定的 123456 展示 */
+      const initial = String((r && r.access_key) || '') || INITIAL_PASSWORD
+      if (!st || !st.id) {
+        /* 建好了却没回成员对象：先刷新让人看到这一行，别让用户重复添加 */
+        setOpErr(`服务端没返回账号信息，${cfg.nameTip}可能已经建好：列表已刷新，请核对`)
+        setUsername('')
         await load()
         return
       }
-      const row = rowFrom(st, key, nm)
+      const row = rowFrom(st, initial, um)
+      const account = row.username || row.name || um
       /* 先剔掉同 id 的旧行，避免列表里已经有他时撞 key */
       setRows((prev) => [...prev.filter((x) => x.id !== row.id), row])
       setLoaded(true)
-      setSecret({ id: row.id, name: row.name, key })
-      setName('')
-      flashOk(`已添加${cfg.nameTip}：${row.name}`)
+      setSecret({ id: row.id, username: account, password: initial })
+      setUsername('')
+      flashOk(`账号已创建：${account}，初始密码 ${initial}，请让对方首次登录后自行修改`)
     } catch (e) {
       setOpErr(opErrorText(e, '添加失败，再试一次'))
     } finally {
@@ -385,7 +394,8 @@ export default function AccountPanel({ open, onClose }) {
       const key = String((r && r.access_key) || '')
       mergeRow(row.id, rowFrom(st, key, row.name))
       if (key) {
-        setSecret({ id: row.id, name: (st && st.name) || row.name, key })
+        const account = (st && (st.username || st.name)) || row.username || row.name
+        setSecret({ id: row.id, username: account, password: key })
       } else {
         /* 密码已换但没有明文：不能让人以为旧密码还能用 */
         setOpErr('密码已重置，但服务端没回明文：再点一次「重置密码」拿新密码')
@@ -436,7 +446,7 @@ export default function AccountPanel({ open, onClose }) {
           <div className="lm-counselor-set-headtext">
             <Eyebrow>ACCOUNT · 账号管理</Eyebrow>
             <h2 className="lm-counselor-set-title" id="lm-account-title">
-              {me && me.name ? me.name : '账号'}
+              {me ? me.username || me.name || '账号' : '账号'}
             </h2>
           </div>
           <button
@@ -466,9 +476,13 @@ export default function AccountPanel({ open, onClose }) {
               {/* ---------- 1. 三个数字 ---------- */}
               <div className="lm-account-stats">
                 <div className="lm-account-stat">
-                  <span className="lm-account-stat-k">本账号角色</span>
-                  <span className="lm-account-stat-v">{ROLE_LABEL[role] || '未知'}</span>
-                  <span className="lm-account-stat-s">{ROLE_CODE[role] || ''}</span>
+                  <span className="lm-account-stat-k">当前账号</span>
+                  <span className="lm-account-stat-v" title={me.username || me.name || ''}>
+                    {me.username || me.name || '—'}
+                  </span>
+                  <span className="lm-account-stat-s">
+                    {ROLE_LABEL[role] || '未知'} · {ROLE_CODE[role] || ''}
+                  </span>
                 </div>
                 <div className="lm-account-stat">
                   <span className="lm-account-stat-k">名下成员</span>
@@ -500,7 +514,7 @@ export default function AccountPanel({ open, onClose }) {
 
                 {!canCreate ? (
                   <p className="lm-account-note">
-                    你的账号没有建号权限：账号由所属辅导员创建和维护，找他要一个自己的密码就行。
+                    你的账号没有建号权限：账号由所属辅导员创建和维护，找他要自己的用户名和初始密码就行。
                   </p>
                 ) : null}
 
@@ -540,8 +554,8 @@ export default function AccountPanel({ open, onClose }) {
                           key={row.id}
                         >
                           <div className="lm-account-main">
-                            <span className="lm-account-name" title={row.name}>
-                              {row.name}
+                            <span className="lm-account-name" title={row.name || row.username || ''}>
+                              {row.name || row.username || '—'}
                             </span>
                             <span className={`lm-account-state${active ? ' is-on' : ''}`}>
                               <span className="lm-account-dot" aria-hidden="true" />
@@ -582,6 +596,13 @@ export default function AccountPanel({ open, onClose }) {
                           </div>
 
                           <div className="lm-account-meta">
+                            <span className="lm-account-meta-k">用户名</span>
+                            <code className="lm-account-meta-v is-mono">
+                              {row.username || row.name || '—'}
+                            </code>
+                            <span className="lm-account-meta-dot" aria-hidden="true">
+                              ·
+                            </span>
                             <span className="lm-account-meta-k">密码</span>
                             <code className={`lm-account-meta-v is-mono${row.key_masked ? '' : ' is-dim'}`}>
                               {row.key_masked || '—'}
@@ -608,13 +629,21 @@ export default function AccountPanel({ open, onClose }) {
                 {secret ? (
                   <div className="lm-account-secret" ref={secretRef} role="status">
                     <div className="lm-account-secret-head">
-                      <Eyebrow>NEW KEY · 只显示这一次</Eyebrow>
-                      <span className="lm-account-secret-name">{secret.name}</span>
+                      <Eyebrow>ACCOUNT · 账号信息</Eyebrow>
+                      <span className="lm-account-secret-name">{secret.username}</span>
                     </div>
-                    <p className="lm-account-secret-tip">{`把下面这串密码发给${secret.name}，只显示这一次`}</p>
+                    <p className="lm-account-secret-tip">
+                      {`把下面这组账号发给 ${secret.username}，初始密码请让对方首次登录后自行修改`}
+                    </p>
                     <div className="lm-account-secret-row">
-                      <code className="lm-account-secret-key">{secret.key}</code>
-                      <CopyBtn text={secret.key} label="复制" />
+                      <span className="lm-account-secret-k">账号</span>
+                      <code className="lm-account-secret-key">{secret.username}</code>
+                      <CopyBtn text={secret.username} label="复制" />
+                    </div>
+                    <div className="lm-account-secret-row">
+                      <span className="lm-account-secret-k">初始密码</span>
+                      <code className="lm-account-secret-key">{secret.password}</code>
+                      <CopyBtn text={secret.password} label="复制" />
                     </div>
                     <div className="lm-account-secret-foot">
                       <Btn variant="amber" size="sm" onClick={() => setSecret(null)}>
@@ -641,19 +670,19 @@ export default function AccountPanel({ open, onClose }) {
                     <div className="lm-account-add">
                       <div className="lm-account-field">
                         <label className="lm-account-label" htmlFor={cfg.inputId}>
-                          {cfg.nameLabel}
+                          {cfg.usernameLabel}
                         </label>
                         <input
                           id={cfg.inputId}
                           className="lm-account-input"
                           type="text"
-                          value={name}
+                          value={username}
                           autoComplete="off"
                           spellCheck="false"
                           maxLength={24}
                           placeholder={cfg.placeholder}
                           disabled={creating}
-                          onChange={(e) => setName(e.target.value)}
+                          onChange={(e) => setUsername(e.target.value)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && canAdd) submitCreate()
                           }}
@@ -669,7 +698,7 @@ export default function AccountPanel({ open, onClose }) {
                       </Btn>
                     </div>
                     <p className="lm-account-hint">
-                      添加后会显示一次密码，复制发给本人；之后这里只看得到掩码。
+                      {`用户名就是登录账号，可以用中文，最长 24 个字；初始密码固定 ${INITIAL_PASSWORD}，建好后会显示一次账号信息，复制发给本人。`}
                     </p>
                   </>
                 ) : null}

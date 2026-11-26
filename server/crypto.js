@@ -122,3 +122,41 @@ export function safeEqual(a, b) {
   const hb = crypto.createHash('sha256').update(String(b ?? '')).digest()
   return crypto.timingSafeEqual(ha, hb)
 }
+
+/* =========================================================================
+   账号密码：scrypt 派生 + 随机盐
+   - 只在库里存 hash 与 salt，任何接口都不回明文；
+   - salt 每次 16 字节随机（hex 存，32 字符）；
+   - 校验用 timingSafeEqual，长度不等直接 false（避免抛错/短路泄露长度）。
+   scrypt 单次约 50-80ms，属于「故意慢」；认证中间件另有 5 分钟内存缓存。
+   ========================================================================= */
+
+/** 辅导员/助理账号的初始密码：建号时一律给它，由本人登录后自行修改 */
+export const DEFAULT_STAFF_PASSWORD = '123456'
+
+const SCRYPT_KEYLEN = 64
+const SCRYPT_SALT_BYTES = 16
+
+/** 派生密码：不传 salt 就现造一个 16 字节随机盐 */
+export function hashPassword(password, salt = crypto.randomBytes(SCRYPT_SALT_BYTES).toString('hex')) {
+  const useSalt = String(salt || '')
+  if (!useSalt) throw new Error('hashPassword: salt 不能为空')
+  const hash = crypto.scryptSync(String(password ?? ''), useSalt, SCRYPT_KEYLEN).toString('hex')
+  return { hash, salt: useSalt }
+}
+
+/** 校验密码：hash/salt 缺失一律 false（老数据、空账号都走这条路） */
+export function verifyPassword(password, hash, salt) {
+  const h = String(hash ?? '')
+  const s = String(salt ?? '')
+  if (!password || !h || !s) return false
+  let got
+  try {
+    got = crypto.scryptSync(String(password), s, SCRYPT_KEYLEN)
+  } catch {
+    return false
+  }
+  const want = Buffer.from(h, 'hex')
+  if (want.length !== got.length) return false
+  return crypto.timingSafeEqual(got, want)
+}

@@ -5,7 +5,10 @@
 
 const BASE = process.env.BASE || 'http://localhost:3000'
 const KEY = process.env.COUNSELOR_KEY || '12345678'
-const SID = '20260007'
+// 示例名单里的越南主角（学号规则：2 硕士 / 26 = 2026级 / 流水 00086）
+const SID = '22600086'
+// 俄罗斯主角（求助那一项用它）
+const SID_RU = '22600089'
 
 let pass = 0
 let fail = 0
@@ -56,6 +59,20 @@ async function main() {
   {
     const r = await call('GET', '/api/notices')
     ok('无 key 访问 /api/notices 返回 401', r.status === 401, r.status)
+
+    // 新登录口：账号名 + 密码（总管 username 固定 owner，密码取自 COUNSELOR_KEY）
+    const login = await call('POST', '/api/auth/login', { username: 'owner', password: KEY })
+    ok('POST /api/auth/login（owner）200', login.status === 200, login.data)
+    ok('登录返回 staff.role = owner', login.data?.staff?.role === 'owner', login.data?.staff)
+    ok('登录返回 staff.username = owner', login.data?.staff?.username === 'owner', login.data?.staff)
+
+    const bad = await call('POST', '/api/auth/login', { username: 'owner', password: `${KEY}x` })
+    ok('密码不对登录返回 401', bad.status === 401, bad.status)
+    ok('401 的 code 是 UNAUTHORIZED', bad.data?.error?.code === 'UNAUTHORIZED', bad.data)
+
+    // 旧路径：只带 x-counselor-key（老前端 / 老脚本）仍然当总管密码用
+    const legacy = await call('GET', '/api/me', undefined, { counselor: true })
+    ok('只带 x-counselor-key 的老路径仍能访问 /api/me', legacy.status === 200, legacy.status)
   }
 
   sec('3. 种子数据')
@@ -169,7 +186,7 @@ async function main() {
   sec('9. 求助')
   {
     const r = await call('POST', `/api/student/notice/${nid}/receipt`, {
-      student_id: '20260012',
+      student_id: SID_RU,
       name: 'Daria Ivanova',
       lang: 'ru',
       kind: 'help',
@@ -177,7 +194,7 @@ async function main() {
     })
     ok('求助 200', r.status === 200, r.data)
     const d = await call('GET', `/api/notices/${nid}/dashboard`, undefined, { counselor: true })
-    const row = (d.data.students || []).find((s) => s.student_id === '20260012')
+    const row = (d.data.students || []).find((s) => s.student_id === SID_RU)
     ok('看板里状态为 help', row?.status === 'help', row?.status)
   }
 

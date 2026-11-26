@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { hashPassword, DEFAULT_STAFF_PASSWORD } from './crypto.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
@@ -50,7 +51,10 @@ const ADDED_COLUMNS = {
     email: 'TEXT',
     email_from: 'TEXT',
     email_provider: 'TEXT',
-    email_api_key: 'TEXT'
+    email_api_key: 'TEXT',
+    username: 'TEXT',
+    pwd_hash: 'TEXT',
+    pwd_salt: 'TEXT'
   }
 }
 
@@ -73,8 +77,48 @@ function migrate(d) {
         console.log(`[db] migrated: ${table}.${name}`)
       }
     }
+
+    backfillStaffLogin(d)
   } catch (e) {
     console.error('[db] 迁移失败（继续）：', e?.message || e)
+  }
+}
+
+/** 老库里的辅导员/助理只有 access_key、没有账号名和密码：
+    补一个「账号名 = 姓名」+ 默认密码，免得升级后这些人直接登不进来。
+    账号名撞车就加 -2/-3 后缀；owner 的隐藏配置行（id='owner'）不参与。 */
+function backfillStaffLogin(d) {
+  try {
+    const rows = d
+      .prepare("SELECT id, name FROM staff WHERE role <> 'owner' AND (username IS NULL OR username = '')")
+      .all()
+    if (!rows.length) return
+    const taken = new Set(
+      d
+        .prepare('SELECT username FROM staff WHERE username IS NOT NULL AND username <> \'\'')
+        .all()
+        .map((r) => String(r.username))
+    )
+    const setUsername = d.prepare('UPDATE staff SET username = ? WHERE id = ?')
+    const setPwd = d.prepare('UPDATE staff SET pwd_hash = ?, pwd_salt = ? WHERE id = ?')
+    let n = 0
+    for (const row of rows) {
+      const base = String(row.name || '').trim().slice(0, 24) || `staff_${String(row.id).slice(-6)}`
+      let username = base
+      for (let k = 2; taken.has(username); k++) username = `${base}-${k}`
+      taken.add(username)
+      const { hash, salt } = hashPassword(DEFAULT_STAFF_PASSWORD)
+      setUsername.run(username, row.id)
+      setPwd.run(hash, salt, row.id)
+      n++
+    }
+    if (n) {
+      console.log(
+        `[db] migrated: ${n} 个旧账号补了 username（= 姓名）与默认密码 ${DEFAULT_STAFF_PASSWORD}，请提醒本人登录后修改`
+      )
+    }
+  } catch (e) {
+    console.error('[db] 旧账号补 username 失败（继续）：', e?.message || e)
   }
 }
 

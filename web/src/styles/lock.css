@@ -89,6 +89,16 @@
   color: var(--muted);
 }
 
+/* 账号 / 密码两栏：一栏一组，栏间留出呼吸 */
+.lm-lock-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.lm-lock-field + .lm-lock-field {
+  margin-top: 14px;
+}
+
 .lm-lock-input {
   width: 100%;
   min-height: 48px;
@@ -103,9 +113,19 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
+/* 账号是给人读的（可能还是中文），别用密码那种字距 */
+.lm-lock-user {
+  letter-spacing: 0.02em;
+}
+
 .lm-lock-input::placeholder {
   color: var(--navy-600);
   letter-spacing: 0.2em;
+}
+
+/* 放在通用 placeholder 规则之后，才盖得住那个 0.2em */
+.lm-lock-user::placeholder {
+  letter-spacing: 0;
 }
 
 .lm-lock-input:focus {

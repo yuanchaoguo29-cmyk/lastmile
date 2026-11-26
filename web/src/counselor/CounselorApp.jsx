@@ -3,7 +3,15 @@
    进入即拦：没有通过校验的访问密码，看不到任何学生数据。 */
 
 import React, { useEffect, useRef, useState } from 'react'
-import { getCounselorKey, setCounselorKey, listNotices, getMe } from '../lib/api.js'
+import {
+  getCounselorKey,
+  getCounselorUser,
+  setCounselorKey,
+  setCounselorUser,
+  listNotices,
+  login,
+  getMe
+} from '../lib/api.js'
 import NoticeList from './NoticeList.jsx'
 import NoticeDetail from './NoticeDetail.jsx'
 import SettingsPanel from './SettingsPanel.jsx'
@@ -11,8 +19,11 @@ import RosterPanel from './RosterPanel.jsx'
 import AccountPanel from './AccountPanel.jsx'
 import { Btn, Eyebrow } from './ui.jsx'
 
+/* 登录态失效：优先看 HTTP 状态码（401/403），老服务端只给文案时才退回正则 */
 function isAuthError(e) {
-  return /401|unauthor|密钥|未授权|key|密码/i.test(String(e?.message || ''))
+  const status = Number(e?.status)
+  if (status === 401 || status === 403) return true
+  return /401|unauthor|密钥|未授权|key|密码|账号/i.test(String(e?.message || ''))
 }
 
 function GearIcon() {
@@ -41,11 +52,13 @@ function RosterIcon() {
 }
 
 function LockScreen({ busy, message, onSubmit }) {
-  const [v, setV] = useState('')
-  const ref = useRef(null)
+  /* 账号与密码都留在本组件里：验证失败时输入原样保留，只多一行红字 */
+  const [user, setUser] = useState('')
+  const [pw, setPw] = useState('')
+  const userRef = useRef(null)
 
   useEffect(() => {
-    ref.current?.focus()
+    userRef.current?.focus()
   }, [])
 
   return (
@@ -54,7 +67,7 @@ function LockScreen({ busy, message, onSubmit }) {
         className="lm-lock-card"
         onSubmit={(e) => {
           e.preventDefault()
-          onSubmit(v)
+          onSubmit(user, pw)
         }}
       >
         <div className="lm-lock-brand">
@@ -69,23 +82,44 @@ function LockScreen({ busy, message, onSubmit }) {
 
         <h1 className="lm-lock-title">辅导员工作台</h1>
         <p className="lm-lock-desc">
-          这份工作台能看到 114 名学生的姓名、回执与求助记录。输入访问密码后进入。
+          这份工作台能看到 114 名学生的姓名、回执与求助记录。用账号和密码进入。
         </p>
 
-        <label className="lm-lock-label" htmlFor="lm-lock-pw">
-          ACCESS · 访问密码
-        </label>
-        <input
-          id="lm-lock-pw"
-          ref={ref}
-          className="lm-lock-input"
-          type="password"
-          value={v}
-          autoComplete="current-password"
-          placeholder="••••••••"
-          disabled={busy}
-          onChange={(e) => setV(e.target.value)}
-        />
+        <div className="lm-lock-field">
+          <label className="lm-lock-label" htmlFor="lm-lock-user">
+            ACCOUNT · 账号
+          </label>
+          <input
+            id="lm-lock-user"
+            ref={userRef}
+            className="lm-lock-input lm-lock-user"
+            type="text"
+            value={user}
+            autoComplete="username"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck="false"
+            placeholder="owner"
+            disabled={busy}
+            onChange={(e) => setUser(e.target.value)}
+          />
+        </div>
+
+        <div className="lm-lock-field">
+          <label className="lm-lock-label" htmlFor="lm-lock-pw">
+            ACCESS · 密码
+          </label>
+          <input
+            id="lm-lock-pw"
+            className="lm-lock-input"
+            type="password"
+            value={pw}
+            autoComplete="current-password"
+            placeholder="••••••••"
+            disabled={busy}
+            onChange={(e) => setPw(e.target.value)}
+          />
+        </div>
 
         {message ? (
           <p className="lm-lock-err" role="alert">
@@ -96,8 +130,6 @@ function LockScreen({ busy, message, onSubmit }) {
         <button className="lm-lock-btn" type="submit" disabled={busy}>
           {busy ? '验证中…' : '进入工作台'}
         </button>
-
-        <p className="lm-lock-note">密码只保存在这台设备的浏览器里，不会上传。</p>
       </form>
     </div>
   )
@@ -106,7 +138,7 @@ function LockScreen({ busy, message, onSubmit }) {
 export default function CounselorApp({ id }) {
   const [now, setNow] = useState(() => new Date())
   const [locked, setLocked] = useState(true)
-  const [busy, setBusy] = useState(() => Boolean(getCounselorKey()))
+  const [busy, setBusy] = useState(() => Boolean(getCounselorKey() && getCounselorUser()))
   const [lockMsg, setLockMsg] = useState('')
   const [token, setToken] = useState(0)
   const [pending, setPending] = useState(null)
@@ -135,11 +167,13 @@ export default function CounselorApp({ id }) {
     return () => clearInterval(t)
   }, [])
 
-  /* 回到这一页时，已存过密码就静默验一次，别让人每次重输；验不过就留在门口。 */
+  /* 回到这一页时，已存过账号 + 密码就静默验一次，别让人每次重输；验不过就留在门口。
+     只存了老版本的密码、没有账号的会话不再自动放行（新登录必须带账号）。 */
   useEffect(() => {
     let alive = true
     const stored = getCounselorKey()
-    if (!stored) {
+    const storedUser = getCounselorUser()
+    if (!stored || !storedUser) {
       setBusy(false)
       return
     }
@@ -151,6 +185,7 @@ export default function CounselorApp({ id }) {
         if (!alive) return
         if (isAuthError(e)) {
           setCounselorKey('')
+          setCounselorUser('')
           setLockMsg('')
         } else {
           setLockMsg(String(e?.message || '校验失败'))
@@ -164,22 +199,40 @@ export default function CounselorApp({ id }) {
     }
   }, [])
 
-  async function submit(v) {
-    const clean = String(v || '').trim()
-    if (!clean) {
+  /* 登录：先调 /api/auth/login 验账号 + 密码，通过了才把这两个值落到本机 */
+  async function submit(rawUser, rawPw) {
+    const user = String(rawUser || '').trim()
+    const pw = String(rawPw ?? '')
+    if (!user) {
+      setLockMsg('请输入账号')
+      return
+    }
+    if (!pw) {
       setLockMsg('请输入密码')
       return
     }
     setBusy(true)
     setLockMsg('')
-    setCounselorKey(clean)
+    /* 换人登录时先丢掉上一位的身份，避免顶栏短暂显示旧账号 */
+    setMe(null)
     try {
-      await listNotices()
+      const out = await login(user, pw)
+      setCounselorUser(user)
+      setCounselorKey(pw)
+      if (out && out.me && typeof out.me === 'object') setMe(out.me)
       setLocked(false)
       setToken((n) => n + 1)
     } catch (e) {
+      /* 没登进去就不留半份凭据，免得下一次请求带着错的身份出去 */
       setCounselorKey('')
-      setLockMsg(isAuthError(e) ? '密码不对，再试一次' : String(e?.message || '校验失败'))
+      setCounselorUser('')
+      const status = Number(e?.status)
+      if (status === 429) {
+        /* 限速不是密码错：原样告诉人还要等多久 */
+        setLockMsg(String(e?.message || '尝试次数太多，请稍后再试'))
+      } else {
+        setLockMsg(isAuthError(e) ? '账号或密码不对' : String(e?.message || '校验失败'))
+      }
     } finally {
       setBusy(false)
     }
@@ -250,9 +303,15 @@ export default function CounselorApp({ id }) {
             </span>
             <span
               className="lm-counselor-keydot"
-              title={me ? `${me.name} · ${me.role === 'owner' ? '主账号' : '助理'}` : '已通过访问密码校验'}
+              title={
+                me
+                  ? `${me.username || me.name} · ${
+                      me.role === 'owner' ? '总管' : me.role === 'counselor' ? '辅导员' : '助理'
+                    }`
+                  : '已通过账号密码校验'
+              }
             >
-              {me ? (me.role === 'owner' ? 'OWNER' : me.name) : 'KEY'}
+              {me ? (me.role === 'owner' ? 'OWNER' : me.username || me.name) : 'KEY'}
             </span>
             <button
               type="button"
@@ -320,9 +379,10 @@ export default function CounselorApp({ id }) {
         <div className="lm-counselor-modal" role="dialog" aria-modal="true" aria-label="我的账号">
           <div className="lm-counselor-modal-box">
             <Eyebrow>ACCOUNT · 助理账号</Eyebrow>
-            <h3 className="lm-counselor-modal-title">{me?.name || '助理'}</h3>
+            <h3 className="lm-counselor-modal-title">{me?.username || me?.name || '助理'}</h3>
             <p className="lm-counselor-modal-hint">
-              你以助理身份登录：能建通知、看板、催办、导出回执。访问密码和 API 配置只有辅导员主账号能改。
+              当前账号：{me?.username || me?.name || '—'}。你以助理身份登录：能建通知、看板、催办、导出回执。总管密码和
+              API 配置只有主账号能改。
             </p>
             <div className="lm-counselor-modal-actions">
               <Btn onClick={() => setAccountOpen(false)}>关闭</Btn>

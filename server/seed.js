@@ -1,5 +1,5 @@
 /* LastMile 种子数据 —— 归属 A（后端）。
-   三份真实通知（正文照抄 docs/seed-notices.md，一个字都不改）+ 114 人名单 + 通知 1 的演示回执。
+   三份真实通知（正文照抄 docs/seed-notices.md，一个字都不改）+ 120 人名单 + 通知 1 的演示回执。
    - 首次启动：createApiRouter() 里调 seedIfEmpty()，notices 非空就什么都不做。
    - 手工执行：node server/seed.js          → 只在空库时灌数据
                 node server/seed.js --reset  → 清空 receipts / quiz_attempts / refusals / events，
@@ -8,6 +8,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getDb, tx, uid } from './db.js'
+import { parseStudentId, ID_DIGIT_OF_DEGREE } from './student-id.js'
 
 /* =========================================================================
    一、三份通知正文（冻结，照抄 docs/seed-notices.md）
@@ -485,31 +486,72 @@ const T1_VI = {
 const TRANSLATIONS_1 = { en: T1_EN, ru: T1_RU, vi: T1_VI }
 
 /* =========================================================================
-   五、114 人名单
-   语言分布：ru 34 / vi 20 / th 15 / id 15 / en 30；学号 20260001-20260114
-   班级：2026-A / B / C 各 38 人；两个主角学生必须落在指定学号与班级
+   五、120 人名单
+   语言分布：ru 36 / en 32 / vi 20 / th 16 / id 16（沿用原来的比例，整体扩到 120 人）
+   学号按「学历 + 年级 + 流水」编码，8 位纯数字，能被 server/student-id.js 解析回同样的学历/年级：
+     d1      1 = 博士 / 2 = 硕士 / 5 = 本科
+     d2 d3   年级：23 → 2023级 / 24 → 2024级 / 26 → 2026级
+     d4-d8   流水号（本名单里就是第几个人，补零到 5 位）
+   名单按年级分三块各 40 人：1-40 是 2023级（2023-A/B）、41-80 是 2024级（2024-A/B）、
+   81-120 是 2026级（2026-A/B）；块内学历按 本科 → 硕士 → 博士 轮转。
+   于是：52300001（本科 · 2023级）/ 22400041（硕士 · 2024级）/ 12600081（博士 · 2026级）。
+   名单不含 email：邮箱由辅导员导入时自己填，正好演示「花名册体检」的缺失提示。
+   注：三份通知正文里的「共114人」照抄 docs/seed-notices.md 的冻结原文，名单扩到 120 人后
+   这个数字不再逐字对应；真实人数以 /api/roster 的 total 为准。
    ========================================================================= */
 
-const COHORT = '2026'
-const CLASSES = ['2026-A', '2026-B', '2026-C']
+const CLASSES_PER_GRADE = 2 // 每个年级 A / B 两个班
+const BLOCK_SIZE = 40 // 每个年级 40 人（120 / 3）
 
-// 两位主角：seed-notices.md 指定
-const PROTAGONISTS = {
-  vi: { index: 7, name: 'NGUYEN Van Anh', name_en: 'Nguyen Van Anh' }, // 20260007 / vi / 2026-A
-  ru: { index: 12, name: 'Иванова Дарья', name_en: 'Daria Ivanova' } // 20260012 / ru / 2026-A
+/** 年级块：d2d3 编码 → 年级 / 届 / 每块 40 人 */
+const GRADE_BLOCKS = [
+  { code: '23', grade: '2023级', cohort: '2023' },
+  { code: '24', grade: '2024级', cohort: '2024' },
+  { code: '26', grade: '2026级', cohort: '2026' }
+]
+
+/** 块内学历轮转顺序（学号第 1 位由 ID_DIGIT_OF_DEGREE 反查，保证编码与字段同源） */
+const DEGREE_CYCLE = ['本科', '硕士', '博士']
+
+/** 第 i 个（从 1 起）学生的确定性档案：学号 / 学历 / 年级 / 届 / 班级 */
+function studentProfileOfIndex(i) {
+  const degree = DEGREE_CYCLE[(i - 1) % DEGREE_CYCLE.length]
+  const blockIndex = Math.min(Math.floor((i - 1) / BLOCK_SIZE), GRADE_BLOCKS.length - 1)
+  const block = GRADE_BLOCKS[blockIndex]
+  const studentId = `${ID_DIGIT_OF_DEGREE[degree]}${block.code}${String(i).padStart(5, '0')}`
+  const letter = 'AB'[Math.floor(((i - 1) % BLOCK_SIZE) / (BLOCK_SIZE / CLASSES_PER_GRADE))] || 'A'
+  return {
+    student_id: studentId,
+    degree,
+    grade: block.grade,
+    cohort: block.cohort,
+    class_no: `${block.cohort}-${letter}`
+  }
 }
 
-/* v2 花名册字段：只给几个学生补全 国籍 / 邮箱 / 学历 / 年级，
-   其余留空，好让「花名册检查」和「邮件通知」两条链路一演示就有真实缺口可看。
-   学号与姓名由 buildRoster 的确定性排布决定（20260001 泰国 / 20260002 俄罗斯 …），
-   这里的国籍与邮箱必须和「同一条记录」对得上，别把 A 的邮箱挂到 B 身上。 */
-const DEMO_PROFILES = {
-  '20260001': { nationality: '泰国', email: 'somchai.wattanakul@example.edu', degree: '本科', grade: '2026级' },
-  '20260002': { nationality: '俄罗斯', email: 'aleksei.petrov@example.edu', degree: '硕士', grade: '2026级' },
-  '20260003': { nationality: '美国', email: 'michael.johnson@example.edu', degree: '本科', grade: '2026级' },
-  '20260007': { nationality: '越南', email: 'nguyen.van.anh@example.edu', degree: '硕士', grade: '2026级' },
-  '20260012': { nationality: '俄罗斯', email: 'daria.ivanova@example.edu', degree: '硕士', grade: '2026级' },
-  '20260030': { nationality: '越南', email: 'le.van.minh@example.edu', degree: '本科', grade: '2026级' }
+// 两位主角：seed-notices.md 指定「一个越南学生求助 + 一个俄罗斯学生只看过」，
+// 都落在 2026-A（硕士 · 2026级），学号由同一条编码规则算出来，不再是手写的 20260007/20260012。
+const PROTAGONISTS = {
+  vi: { index: 86, name: 'NGUYEN Van Anh', name_en: 'Nguyen Van Anh' }, // 22600086 / vi / 2026-A
+  ru: { index: 89, name: 'Иванова Дарья', name_en: 'Daria Ivanova' } // 22600089 / ru / 2026-A
+}
+
+const PROG_VI_ID = studentProfileOfIndex(PROTAGONISTS.vi.index).student_id
+const PROG_RU_ID = studentProfileOfIndex(PROTAGONISTS.ru.index).student_id
+
+/** 国籍按语言给（名单里每个人都有国籍，邮箱留给辅导员导入） */
+const NATIONALITY_BY_LANG = {
+  ru: '俄罗斯',
+  vi: '越南',
+  th: '泰国',
+  id: '印度尼西亚',
+  en: null // en 池子里多国籍，按索引轮转，见 EN_NATIONALITIES
+}
+const EN_NATIONALITIES = ['美国', '英国', '加拿大', '澳大利亚']
+
+function nationalityOf(lang, index) {
+  if (lang === 'en') return EN_NATIONALITIES[(index - 1) % EN_NATIONALITIES.length]
+  return NATIONALITY_BY_LANG[lang] || null
 }
 
 // 每个语言的姓名池，数量与配额完全一致（主角算在池里）
@@ -548,7 +590,9 @@ const NAME_POOLS = {
     { name: 'Гусева Полина', name_en: 'Polina Guseva' },
     { name: 'Титов Владимир', name_en: 'Vladimir Titov' },
     { name: 'Ермакова Олеся', name_en: 'Olesia Ermakova' },
-    { name: 'Никитин Тимур', name_en: 'Timur Nikitin' }
+    { name: 'Никитин Тимур', name_en: 'Timur Nikitin' },
+    { name: 'Захарова Елена', name_en: 'Elena Zakharova' },
+    { name: 'Дмитриев Олег', name_en: 'Oleg Dmitriev' }
   ],
   vi: [
     { name: 'NGUYEN Van Anh', name_en: 'Nguyen Van Anh', protagonist: 'vi' },
@@ -587,7 +631,8 @@ const NAME_POOLS = {
     { name: 'นภาพร ศิริวัฒน์', name_en: 'Napaporn Siriwat' },
     { name: 'กิตติศักดิ์ พูลสวัสดิ์', name_en: 'Kittisak Phoonsawat' },
     { name: 'มาลี จันทร์เพ็ญ', name_en: 'Malee Chanphen' },
-    { name: 'ภาณุพงศ์ อินทรีย์', name_en: 'Panupong Intri' }
+    { name: 'ภาณุพงศ์ อินทรีย์', name_en: 'Panupong Intri' },
+    { name: 'ธนวัฒน์ ศรีสมบัติ', name_en: 'Thanawat Srisombat' }
   ],
   id: [
     { name: 'Ahmad Fauzi', name_en: 'Ahmad Fauzi' },
@@ -604,7 +649,8 @@ const NAME_POOLS = {
     { name: 'Intan Permata', name_en: 'Intan Permata' },
     { name: 'Dimas Saputra', name_en: 'Dimas Saputra' },
     { name: 'Rina Kartika', name_en: 'Rina Kartika' },
-    { name: 'Yusuf Ramadhan', name_en: 'Yusuf Ramadhan' }
+    { name: 'Yusuf Ramadhan', name_en: 'Yusuf Ramadhan' },
+    { name: 'Rudi Hartono', name_en: 'Rudi Hartono' }
   ],
   en: [
     { name: 'Michael Johnson', name_en: 'Michael Johnson' },
@@ -636,22 +682,23 @@ const NAME_POOLS = {
     { name: 'Brian Adams', name_en: 'Brian Adams' },
     { name: 'Melissa Nelson', name_en: 'Melissa Nelson' },
     { name: 'Jonathan Hill', name_en: 'Jonathan Hill' },
-    { name: 'Rebecca Campbell', name_en: 'Rebecca Campbell' }
+    { name: 'Rebecca Campbell', name_en: 'Rebecca Campbell' },
+    { name: 'Jessica Turner', name_en: 'Jessica Turner' },
+    { name: 'Ryan Cooper', name_en: 'Ryan Cooper' }
   ]
 }
 
 const LANG_QUOTA = [
-  { lang: 'ru', count: 34, phase: 0.5 },
-  { lang: 'en', count: 30, phase: 0.5 },
+  { lang: 'ru', count: 36, phase: 0.5 },
+  { lang: 'en', count: 32, phase: 0.5 },
   { lang: 'vi', count: 20, phase: 0.29 },
-  { lang: 'th', count: 15, phase: 0.13 },
-  { lang: 'id', count: 15, phase: 0.78 }
+  { lang: 'th', count: 16, phase: 0.13 },
+  { lang: 'id', count: 16, phase: 0.78 }
 ]
 
-const ROSTER_SIZE = LANG_QUOTA.reduce((n, x) => n + x.count, 0) // 114
-const CLASS_SIZE = ROSTER_SIZE / CLASSES.length // 38
+const ROSTER_SIZE = LANG_QUOTA.reduce((n, x) => n + x.count, 0) // 120
 
-/** 把每种语言按配额均匀铺到 114 个槽位上（确定性，无随机） */
+/** 把每种语言按配额均匀铺到 120 个槽位上（确定性，无随机） */
 function planLangSlots() {
   const slots = new Array(ROSTER_SIZE).fill(null)
   const overflow = []
@@ -683,7 +730,7 @@ function forceSlotLang(slots, index, lang) {
   }
 }
 
-/** 生成 114 条名单（纯函数，方便断言） */
+/** 生成 120 条名单（纯函数，方便断言） */
 export function buildRoster() {
   const slots = planLangSlots()
   forceSlotLang(slots, PROTAGONISTS.vi.index - 1, 'vi')
@@ -700,28 +747,35 @@ export function buildRoster() {
   }
 
   const roster = []
-  for (let i = 0; i < ROSTER_SIZE; i++) {
-    const lang = slots[i]
-    const studentId = `${COHORT}${String(i + 1).padStart(4, '0')}` // 20260001-20260114
-    let person = forced.get(i)
+  for (let i = 1; i <= ROSTER_SIZE; i++) {
+    const lang = slots[i - 1]
+    const profile = studentProfileOfIndex(i)
+
+    // 自检：名单里的学号与学历/年级必须自洽，否则「学号推断」演示就是假的
+    const parsed = parseStudentId(profile.student_id)
+    if (!parsed || parsed.degree !== profile.degree || parsed.grade !== profile.grade) {
+      throw new Error(`示例学号 ${profile.student_id} 与学历「${profile.degree}」/年级「${profile.grade}」不一致`)
+    }
+
+    let person = forced.get(i - 1)
     if (!person) {
       person = queues[lang].shift()
-      if (!person) person = { name: `Student ${studentId}`, name_en: `Student ${studentId}` }
+      if (!person) person = { name: `Student ${profile.student_id}`, name_en: `Student ${profile.student_id}` }
     }
-    const profile = DEMO_PROFILES[studentId] || {}
     roster.push({
-      student_id: studentId,
+      student_id: profile.student_id,
       name: person.name,
       name_en: person.name_en,
       lang,
-      class_no: CLASSES[Math.floor(i / CLASS_SIZE)] || CLASSES[CLASSES.length - 1],
-      cohort: COHORT,
+      class_no: profile.class_no,
+      cohort: profile.cohort,
       // 示例学生不属于任何辅导员：owner_staff_id = NULL，只有总管看得见
       owner_staff_id: null,
-      nationality: profile.nationality ?? null,
-      email: profile.email ?? null,
-      degree: profile.degree ?? null,
-      grade: profile.grade ?? null
+      nationality: nationalityOf(lang, i),
+      // 名单不带 email：留给辅导员导入时自己补，正好演示「花名册体检」的缺失提示
+      email: null,
+      degree: profile.degree,
+      grade: profile.grade
     })
   }
   return roster
@@ -733,35 +787,35 @@ export function buildRoster() {
    ========================================================================= */
 
 const DEMO_CONFIRMED = [
-  { student_id: '20260001', hour: 0.5 },
-  { student_id: '20260002', hour: 1.2 },
-  { student_id: '20260003', hour: 2.0 },
-  { student_id: '20260004', hour: 3.5 },
-  { student_id: '20260005', hour: 5.0 },
-  { student_id: '20260006', hour: 7.0 },
-  { student_id: '20260008', hour: 9.5 },
-  { student_id: '20260009', hour: 12.0 },
-  { student_id: '20260010', hour: 15.0 },
-  { student_id: '20260011', hour: 20.0 }
-]
+  { index: 1, hour: 0.5 },
+  { index: 2, hour: 1.2 },
+  { index: 3, hour: 2.0 },
+  { index: 4, hour: 3.5 },
+  { index: 5, hour: 5.0 },
+  { index: 6, hour: 7.0 },
+  { index: 8, hour: 9.5 },
+  { index: 9, hour: 12.0 },
+  { index: 10, hour: 15.0 },
+  { index: 11, hour: 20.0 }
+].map((x) => ({ student_id: studentProfileOfIndex(x.index).student_id, hour: x.hour }))
 
 const DEMO_HELP = {
-  student_id: '20260007',
+  student_id: PROG_VI_ID, // 越南主角（22600086）
   hour: 2.5,
   message: 'Hộ chiếu của tôi đang được cấp lại, chưa có bản gốc. / 我的护照正在补办，暂时没有原件。'
 }
 
-const DEMO_SEEN_ONLY = { student_id: '20260012', hour: 4.2 }
+const DEMO_SEEN_ONLY = { student_id: PROG_RU_ID, hour: 4.2 } // 俄罗斯主角（22600089）
 
 const DEMO_REFUSALS = [
   {
-    student_id: '20260007',
+    student_id: PROG_VI_ID,
     hour: 3.1,
     question: 'My visa expires next month too. Can I stay in China if I only extend the residence permit?',
     reason_code: 'visa'
   },
   {
-    student_id: '20260012',
+    student_id: PROG_RU_ID,
     hour: 6.4,
     question: '体检说我肝功能异常，需要去哪个医院复查？会不会影响我的居留许可？',
     reason_code: 'medical'
@@ -786,13 +840,12 @@ function insertStudents(db) {
   const ins = db.prepare(
     `INSERT INTO students
        (student_id, name, name_en, lang, class_no, cohort, is_demo,
-        nationality, email, degree, grade, owner_staff_id)
-     VALUES (?,?,?,?,?,?,1,?,?,?,?,NULL)
+        nationality, degree, grade, owner_staff_id)
+     VALUES (?,?,?,?,?,?,1,?,?,?,NULL)
      ON CONFLICT(student_id) DO UPDATE SET
        name = excluded.name, name_en = excluded.name_en, lang = excluded.lang,
        class_no = excluded.class_no, cohort = excluded.cohort, is_demo = 1,
        nationality = COALESCE(excluded.nationality, students.nationality),
-       email = COALESCE(excluded.email, students.email),
        degree = COALESCE(excluded.degree, students.degree),
        grade = COALESCE(excluded.grade, students.grade)`
   )
@@ -805,7 +858,6 @@ function insertStudents(db) {
       s.class_no,
       s.cohort,
       s.nationality ?? null,
-      s.email ?? null,
       s.degree ?? null,
       s.grade ?? null
     )
